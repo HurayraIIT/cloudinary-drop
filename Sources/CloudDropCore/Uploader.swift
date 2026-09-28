@@ -73,14 +73,22 @@ public struct Uploader: Sendable {
         if status == 200, let secure = json?["secure_url"] as? String, let url = URL(string: secure) {
             return url
         }
-        if let error = json?["error"] as? [String: Any], let message = error["message"] as? String {
-            throw UploadError.cloudinary(message)
+        if status == 403 { throw UploadError.cloudinary(Self.cannotUploadMessage) }
+        if let message = Self.errorMessage(in: data) {
+            throw UploadError.cloudinary("\(message) (HTTP \(status))")
         }
         throw UploadError.unexpectedResponse(status)
     }
 
-    /// Makes one read-only call to check that a Cloudinary URL is accepted.
+    static let cannotUploadMessage = "This API key isn't allowed to upload (it lacks Cloudinary's \"create\" permission). Use a key with upload access."
+
+    /// Checks that a Cloudinary URL is accepted and that its key may upload. Creates nothing.
     public static func verify(_ credentials: CloudinaryCredentials) async throws {
+        try await ping(credentials)
+        try await probeUploadPermission(credentials)
+    }
+
+    private static func ping(_ credentials: CloudinaryCredentials) async throws {
         var request = URLRequest(url: URL(string: "https://api.cloudinary.com/v1_1/\(credentials.cloudName)/ping")!)
         let auth = Data("\(credentials.apiKey):\(credentials.apiSecret)".utf8).base64EncodedString()
         request.setValue("Basic \(auth)", forHTTPHeaderField: "Authorization")
@@ -93,6 +101,35 @@ public struct Uploader: Sendable {
         case 404: throw UploadError.cloudinary("Cloudinary doesn't know the cloud name \(credentials.cloudName)")
         case let status: throw UploadError.unexpectedResponse(status)
         }
+    }
+
+    /// Sends a signed upload request without a file. A key that may upload gets
+    /// "Missing required parameter - file". A key without upload permission gets 403.
+    private static func probeUploadPermission(_ credentials: CloudinaryCredentials) async throws {
+        var params = ["timestamp": String(Int(Date().timeIntervalSince1970))]
+        params["signature"] = uploadSignature(params, secret: credentials.apiSecret)
+        params["api_key"] = credentials.apiKey
+
+        var request = URLRequest(url: URL(string: "https://api.cloudinary.com/v1_1/\(credentials.cloudName)/image/upload")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(params.map { "\($0.key)=\($0.value)" }.joined(separator: "&").utf8)
+        request.timeoutInterval = 20
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let message = errorMessage(in: data) ?? ""
+        switch status {
+        case 400 where message.localizedCaseInsensitiveContains("file"): return
+        case 403: throw UploadError.cloudinary(cannotUploadMessage)
+        case 401: throw UploadError.cloudinary("Cloudinary rejected the API key or secret")
+        default: throw UploadError.cloudinary(message.isEmpty ? "Cloudinary answered with HTTP \(status)" : message)
+        }
+    }
+
+    private static func errorMessage(in data: Data) -> String? {
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return (json?["error"] as? [String: Any])?["message"] as? String
     }
 
     /// Streams the file into a multipart body on disk so large videos never sit in memory.

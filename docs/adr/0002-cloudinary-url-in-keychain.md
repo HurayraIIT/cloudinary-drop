@@ -1,6 +1,6 @@
 # Cloudinary URL entered once and stored in the Keychain
 
-CloudDrop needs the account's API secret to sign uploads. An app launched from Finder or at login does not inherit variables from `~/.zshrc`, so the Cloudinary URL is pasted once per Mac into a small settings window and kept in the login Keychain. The settings window checks it with a read-only call to Cloudinary before saving it.
+CloudDrop needs the account's API secret to sign uploads. An app launched from Finder or at login does not inherit variables from `~/.zshrc`, so the Cloudinary URL is pasted once per Mac into a small settings window and kept in the login Keychain. Before saving, the settings window checks it with Cloudinary, including whether the key may upload. The check creates nothing.
 
 ## Considered Options
 

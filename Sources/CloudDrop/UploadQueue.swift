@@ -1,6 +1,10 @@
 import AppKit
 import CloudDropCore
+import OSLog
 import UniformTypeIdentifiers
+
+/// Watch with: log stream --predicate 'subsystem == "com.hurayraiit.clouddrop"'
+let log = Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")
 
 /// One entry in the Link History.
 struct HistoryEntry {
@@ -42,6 +46,7 @@ final class UploadQueue {
     }
 
     func refuse(_ message: String) {
+        log.error("Refused: \(message, privacy: .public)")
         lastError = message
         onEvent(.failed)
     }
@@ -90,16 +95,19 @@ final class UploadQueue {
         }
         progress = 0
         onEvent(.changed)
+        let publicID = PublicID.make(originalFilename: job.filename)
+        log.info("Uploading \(job.fileURL.path, privacy: .public) as \(job.kind.rawValue, privacy: .public) \(publicID, privacy: .public)")
 
         do {
             let secureURL = try await Uploader(credentials: credentials).upload(
                 fileURL: job.fileURL,
                 kind: job.kind,
-                publicID: PublicID.make(originalFilename: job.filename),
+                publicID: publicID,
                 progress: { [weak self] fraction in
                     Task { @MainActor in self?.report(progress: fraction) }
                 })
             let link = ShareLink.make(secureURL: secureURL)
+            log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
             copyToClipboard(link)
             NSWorkspace.shared.open(link)
             history.insert(HistoryEntry(filename: job.filename, uploadedAt: Date(), link: link), at: 0)
@@ -107,6 +115,7 @@ final class UploadQueue {
             progress = nil
             onEvent(.succeeded)
         } catch {
+            log.error("Upload failed for \(job.filename, privacy: .public): \(String(describing: error), privacy: .public)")
             progress = nil
             lastError = "\(job.filename): \(error.localizedDescription)"
             onEvent(.failed)

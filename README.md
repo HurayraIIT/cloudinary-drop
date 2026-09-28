@@ -16,11 +16,17 @@ make install      # builds build/CloudDrop.app, copies it to /Applications and l
 
 On first launch:
 1. Click the cloud icon, choose **Set Cloudinary URL…**, paste `cloudinary://key:secret@cloud` and press Save. The URL is checked with Cloudinary and stored in the Keychain.
-2. On your first Drop, macOS asks whether CloudDrop may use the Keychain item. Choose **Always Allow**. After each rebuild it asks once more, because builds are signed ad-hoc (ADR 0002).
+2. No Keychain prompt appears at first, because CloudDrop created the Keychain item itself. After a rebuild (`make install`), the next Drop makes macOS ask whether CloudDrop may use the item, because builds are signed ad-hoc (ADR 0002). Choose **Always Allow**.
 
 Launch at Login is on by default and can be toggled in the menu.
 
 ## Develop
+
+Failures are logged. To watch them:
+
+```sh
+log stream --predicate 'subsystem == "com.hurayraiit.clouddrop"'
+```
 
 ```sh
 make test    # Swift Testing via Command Line Tools; fails if no tests ran
