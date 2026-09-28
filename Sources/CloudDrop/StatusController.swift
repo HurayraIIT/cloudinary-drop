@@ -98,8 +98,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     private func receive(_ promises: [NSFilePromiseReceiver]) {
-        let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clouddrop-drops/\(UUID().uuidString)", isDirectory: true)
+        let folder = TemporaryFiles.dropFolder()
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for promise in promises {
             promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: promiseQueue) { [weak self] url, error in

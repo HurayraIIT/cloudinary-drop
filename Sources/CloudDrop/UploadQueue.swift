@@ -38,6 +38,10 @@ final class UploadQueue {
 
     private var pending: [Job] = []
     private var isRunning = false
+    /// Reused across Uploads so they share one URLSession and its connections.
+    private var uploader: Uploader?
+    /// Counts Uploads, so progress arriving late from a finished one is ignored.
+    private var uploadNumber = 0
 
     /// A new Drop clears the Last Error from the previous one.
     func beginDrop() {
@@ -53,11 +57,16 @@ final class UploadQueue {
 
     /// Checks a dropped file and queues it if it is a Media File within its Size Limit.
     func add(fileURL: URL, isTemporary: Bool = false) {
-        let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey])
         let filename = fileURL.lastPathComponent
-        let type = values?.isDirectory == true ? nil : values?.contentType
+        let result: Result<MediaKind, Refusal>
+        if let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey]) {
+            let type = values.isDirectory == true ? nil : values.contentType
+            result = checkMediaFile(filename: filename, type: type, byteCount: values.fileSize.map(Int64.init))
+        } else {
+            result = .failure(.unreadable(filename: filename))
+        }
 
-        switch checkMediaFile(filename: filename, type: type, byteCount: Int64(values?.fileSize ?? 0)) {
+        switch result {
         case let .failure(refusal):
             if isTemporary { try? FileManager.default.removeItem(at: fileURL) }
             refuse(refusal.message)
@@ -93,18 +102,20 @@ final class UploadQueue {
             refuse("Set Cloudinary URL first")
             return
         }
+        uploadNumber += 1
+        let number = uploadNumber
         progress = 0
         onEvent(.changed)
         let publicID = PublicID.make(originalFilename: job.filename)
         log.info("Uploading \(job.fileURL.path, privacy: .public) as \(job.kind.rawValue, privacy: .public) \(publicID, privacy: .public)")
 
         do {
-            let secureURL = try await Uploader(credentials: credentials).upload(
+            let secureURL = try await uploader(for: credentials).upload(
                 fileURL: job.fileURL,
                 kind: job.kind,
                 publicID: publicID,
                 progress: { [weak self] fraction in
-                    Task { @MainActor in self?.report(progress: fraction) }
+                    Task { @MainActor in self?.report(progress: fraction, upload: number) }
                 })
             let link = ShareLink.make(secureURL: secureURL)
             log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
@@ -122,10 +133,20 @@ final class UploadQueue {
         }
     }
 
-    private func report(progress fraction: Double) {
-        guard progress != nil else { return }
+    /// Swaps in a new Uploader only when the Cloudinary URL has changed.
+    private func uploader(for credentials: CloudinaryCredentials) -> Uploader {
+        if let uploader, uploader.credentials == credentials { return uploader }
+        uploader?.invalidate()
+        let fresh = Uploader(credentials: credentials)
+        uploader = fresh
+        return fresh
+    }
+
+    private func report(progress fraction: Double, upload number: Int) {
+        guard number == uploadNumber, let shown = progress else { return }
         progress = fraction
-        onEvent(.changed)
+        // A large file reports progress thousands of times; redraw only when the percentage changes.
+        if Int(fraction * 100) != Int(shown * 100) { onEvent(.changed) }
     }
 
     private func copyToClipboard(_ link: URL) {

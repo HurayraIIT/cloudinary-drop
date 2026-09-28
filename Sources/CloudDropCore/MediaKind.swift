@@ -33,12 +33,15 @@ public enum MediaKind: String, Sendable {
 /// Why a file in a Drop was refused before uploading.
 public enum Refusal: Error, Equatable, Sendable {
     case notMedia(filename: String)
+    case unreadable(filename: String)
     case tooLarge(filename: String, kind: MediaKind, byteCount: Int64)
 
     public var message: String {
         switch self {
         case let .notMedia(filename):
             "\(filename) isn't an image or video"
+        case let .unreadable(filename):
+            "\(filename) couldn't be read"
         case let .tooLarge(filename, kind, byteCount):
             "\(filename) is \(megabytes(byteCount)), \(kind.rawValue) limit is \(megabytes(kind.sizeLimit))"
         }
@@ -46,9 +49,13 @@ public enum Refusal: Error, Equatable, Sendable {
 }
 
 /// Decides whether a dropped file is a Media File within its Size Limit.
-public func checkMediaFile(filename: String, type: UTType?, byteCount: Int64) -> Result<MediaKind, Refusal> {
+/// An unknown size is refused rather than let past the Size Limit.
+public func checkMediaFile(filename: String, type: UTType?, byteCount: Int64?) -> Result<MediaKind, Refusal> {
     guard let type, let kind = MediaKind(type: type) else {
         return .failure(.notMedia(filename: filename))
+    }
+    guard let byteCount else {
+        return .failure(.unreadable(filename: filename))
     }
     guard byteCount <= kind.sizeLimit else {
         return .failure(.tooLarge(filename: filename, kind: kind, byteCount: byteCount))

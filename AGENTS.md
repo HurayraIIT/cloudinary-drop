@@ -63,10 +63,11 @@ Sources/
     PublicID.swift                public_id = clouddrop/<yyMMdd_HHmmss>_<4-char random>_<slug>; the slug rules
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
     ShareLink.swift               Share Link from secure_url (the HEIC/HEIF → .jpg exception); MenuText.truncateMiddle
-    Uploader.swift                Signing, the streamed multipart upload with progress, verify() (ping + upload-permission probe)
+    TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
+    Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
-    AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController
+    AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Link History, Last Error, logging
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save
@@ -87,7 +88,7 @@ Makefile                          Build, bundle, sign, install, and the test wra
    - calls `queue.beginDrop()`, which **clears the Last Error**
    - checks that credentials exist; if not, it refuses and opens settings
    - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Promised files are received into a temporary folder and deleted after uploading.
-4. `UploadQueue.add` runs `checkMediaFile` (type and Size Limit). A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
+4. `UploadQueue.add` runs `checkMediaFile` (type and Size Limit). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
 5. `drain()` uploads **one at a time**. For each success:
    - `ShareLink.make` builds the Share Link
    - it's copied to the clipboard and opened with `NSWorkspace.shared.open`
@@ -147,7 +148,9 @@ These are decisions the user made during design. Changing any of them needs thei
 **Memory**
 - The multipart body is **streamed to a temp file** in 1 MB chunks, then sent with `session.upload(for:fromFile:delegate:)`.
 - Each chunk is copied inside `autoreleasepool`. Without it every chunk stays alive until the upload finishes: a 75 MB video peaked at about 80 MB before this fix and about 17 MB after. Never load a whole file into `Data`.
-- Progress comes from a per-task `URLSessionTaskDelegate` (`didSendBodyData`) and is hopped to the main actor.
+- Progress comes from a per-task `URLSessionTaskDelegate` (`didSendBodyData`) and is hopped to the main actor. `UploadQueue` ignores progress from an earlier Upload and only redraws the icon when the whole percentage changes.
+- `UploadQueue` keeps **one `Uploader` (one `URLSession`)** and reuses it while the Cloudinary URL stays the same. A replaced one is `invalidate()`d.
+- Quitting mid-upload skips the `defer` that deletes the multipart body, so `TemporaryFiles.removeLeftovers()` runs at launch and in `applicationWillTerminate`. It only touches `clouddrop-*.multipart` and `clouddrop-drops/`.
 
 **Checking credentials: `Uploader.verify`**
 1. `GET /ping` with Basic auth. This proves the key and secret are valid, but **not** that the key may upload.
@@ -160,7 +163,7 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Errors**
 - `UploadError.cloudinary(message)` carries Cloudinary's `error.message`, plus `(HTTP n)`.
-- A 403 during upload is mapped to a readable "isn't allowed to upload" message.
+- A 403 becomes `UploadError.notAllowedToUpload(cloudinaryMessage:)`. The menu shows the readable "isn't allowed to upload" message, and its `description` (what the log prints) adds Cloudinary's own message.
 
 **The account's plan:** Free. Size limits are 10 MB per image and 100 MB per video. If the plan changes, update `MediaKind.sizeLimit`, the tests, the README and ADR 0003 together.
 
@@ -186,7 +189,7 @@ These are decisions the user made during design. Changing any of them needs thei
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, slug and public_id rules, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, the HEIC link, and menu truncation.
+- They cover: parsing the Cloudinary URL, slug and public_id rules, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 case), the temp-file sweep, the HEIC link, and menu truncation.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.

@@ -1,13 +1,21 @@
 import AppKit
+import CloudDropCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusController: StatusController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Also catches what a crash or `make install`'s pkill left, which skip applicationWillTerminate.
+        TemporaryFiles.removeLeftovers()
         NSApp.mainMenu = Self.makeMainMenu()
         LoginItem.enableOnFirstLaunch()
         statusController = StatusController()
+    }
+
+    /// Quit is immediate (ADR 0004), so an Upload in progress never gets to delete its files.
+    func applicationWillTerminate(_ notification: Notification) {
+        TemporaryFiles.removeLeftovers()
     }
 
     /// A menu-bar-only app has no visible main menu, but without one ⌘V doesn't paste

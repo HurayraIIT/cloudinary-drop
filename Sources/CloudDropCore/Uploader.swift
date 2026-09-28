@@ -1,14 +1,25 @@
 import CryptoKit
 import Foundation
 
-public enum UploadError: LocalizedError, Sendable {
+public enum UploadError: LocalizedError, CustomStringConvertible, Equatable, Sendable {
     case cloudinary(String)
+    /// A 403. The menu explains it in plain words; Cloudinary's own message is kept for the log.
+    case notAllowedToUpload(cloudinaryMessage: String?)
     case unexpectedResponse(Int)
 
     public var errorDescription: String? {
         switch self {
         case let .cloudinary(message): message
+        case .notAllowedToUpload: "This API key isn't allowed to upload (it lacks Cloudinary's \"create\" permission). Use a key with upload access."
         case let .unexpectedResponse(status): "Cloudinary answered with HTTP \(status)"
+        }
+    }
+
+    /// What the log shows.
+    public var description: String {
+        switch self {
+        case let .notAllowedToUpload(message?): "\(errorDescription ?? "") Cloudinary said: \(message) (HTTP 403)"
+        default: errorDescription ?? ""
         }
     }
 }
@@ -26,8 +37,9 @@ public func uploadSignature(_ params: [String: String], secret: String) -> Strin
 }
 
 /// Sends Media Files straight to Cloudinary's signed upload API (ADR 0003).
+/// Keep one per Cloudinary URL so Uploads share a session, and `invalidate()` it when replaced.
 public struct Uploader: Sendable {
-    let credentials: CloudinaryCredentials
+    public let credentials: CloudinaryCredentials
     let session: URLSession
 
     public init(credentials: CloudinaryCredentials) {
@@ -38,6 +50,11 @@ public struct Uploader: Sendable {
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 24 * 60 * 60
         session = URLSession(configuration: configuration)
+    }
+
+    /// Releases the session once any Upload still running on it has finished.
+    public func invalidate() {
+        session.finishTasksAndInvalidate()
     }
 
     /// Uploads one Media File and returns its `secure_url`.
@@ -56,8 +73,7 @@ public struct Uploader: Sendable {
         params["api_key"] = credentials.apiKey
 
         let boundary = "CloudDrop-\(UUID().uuidString)"
-        let bodyURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clouddrop-\(UUID().uuidString).multipart")
+        let bodyURL = TemporaryFiles.multipartBody()
         defer { try? FileManager.default.removeItem(at: bodyURL) }
         try writeMultipartBody(to: bodyURL, boundary: boundary, params: params, fileURL: fileURL)
 
@@ -67,20 +83,20 @@ public struct Uploader: Sendable {
 
         let (data, response) = try await session.upload(
             for: request, fromFile: bodyURL, delegate: ProgressDelegate(onProgress: progress))
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        return try Self.secureURL(status: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
+    }
 
+    /// Reads Cloudinary's answer to an upload: the `secure_url`, or the error to show.
+    static func secureURL(status: Int, data: Data) throws -> URL {
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if status == 200, let secure = json?["secure_url"] as? String, let url = URL(string: secure) {
             return url
         }
-        if status == 403 { throw UploadError.cloudinary(Self.cannotUploadMessage) }
-        if let message = Self.errorMessage(in: data) {
-            throw UploadError.cloudinary("\(message) (HTTP \(status))")
-        }
+        let message = errorMessage(in: data)
+        if status == 403 { throw UploadError.notAllowedToUpload(cloudinaryMessage: message) }
+        if let message { throw UploadError.cloudinary("\(message) (HTTP \(status))") }
         throw UploadError.unexpectedResponse(status)
     }
-
-    static let cannotUploadMessage = "This API key isn't allowed to upload (it lacks Cloudinary's \"create\" permission). Use a key with upload access."
 
     /// Checks that a Cloudinary URL is accepted and that its key may upload. Creates nothing.
     public static func verify(_ credentials: CloudinaryCredentials) async throws {
@@ -121,7 +137,7 @@ public struct Uploader: Sendable {
         let message = errorMessage(in: data) ?? ""
         switch status {
         case 400 where message.localizedCaseInsensitiveContains("file"): return
-        case 403: throw UploadError.cloudinary(cannotUploadMessage)
+        case 403: throw UploadError.notAllowedToUpload(cloudinaryMessage: message.isEmpty ? nil : message)
         case 401: throw UploadError.cloudinary("Cloudinary rejected the API key or secret")
         default: throw UploadError.cloudinary(message.isEmpty ? "Cloudinary answered with HTTP \(status)" : message)
         }

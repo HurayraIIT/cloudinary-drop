@@ -111,7 +111,7 @@ Click the icon to see:
 | | |
 |---|---|
 | Accepted | Images (PNG, JPEG, HEIC, GIF, WebP, …) and videos (MOV, MP4, …) |
-| Refused | Everything else (PDFs, zips, folders) |
+| Refused | Everything else (PDFs, zips, folders), and files whose size can't be read |
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
 | Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown |
 

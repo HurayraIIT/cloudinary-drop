@@ -126,6 +126,64 @@ import UniformTypeIdentifiers
         #expect(checkMediaFile(filename: "folder", type: nil, byteCount: 0) == .failure(.notMedia(filename: "folder")))
         #expect(Refusal.notMedia(filename: "notes.pdf").message == "notes.pdf isn't an image or video")
     }
+
+    @Test func unknownSizeIsRefusedNotWavedThrough() {
+        #expect(checkMediaFile(filename: "a.png", type: .png, byteCount: nil) == .failure(.unreadable(filename: "a.png")))
+        #expect(Refusal.unreadable(filename: "a.png").message == "a.png couldn't be read")
+    }
+}
+
+@Suite struct UploadResponses {
+    private func body(_ json: String) -> Data { Data(json.utf8) }
+
+    @Test func successReturnsSecureURL() throws {
+        let url = try Uploader.secureURL(status: 200, data: body(#"{"secure_url":"https://res.cloudinary.com/c/image/upload/v1/clouddrop/x.png"}"#))
+        #expect(url.absoluteString == "https://res.cloudinary.com/c/image/upload/v1/clouddrop/x.png")
+    }
+
+    @Test func forbiddenKeepsCloudinaryMessageForTheLog() {
+        let raw = #"missing permissions (actions=["create"])"#
+        #expect(throws: UploadError.notAllowedToUpload(cloudinaryMessage: raw)) {
+            try Uploader.secureURL(status: 403, data: body(#"{"error":{"message":"missing permissions (actions=[\"create\"])"}}"#))
+        }
+        let error: any Error = UploadError.notAllowedToUpload(cloudinaryMessage: raw)
+        #expect(error.localizedDescription.contains("isn't allowed to upload"))
+        #expect(!error.localizedDescription.contains(raw))
+        #expect(String(describing: error).contains(raw))
+    }
+
+    @Test func otherErrorsShowCloudinaryMessageAndStatus() {
+        #expect(throws: UploadError.cloudinary("Invalid image file (HTTP 400)")) {
+            try Uploader.secureURL(status: 400, data: body(#"{"error":{"message":"Invalid image file"}}"#))
+        }
+    }
+
+    @Test func unreadableAnswerReportsStatus() {
+        #expect(throws: UploadError.unexpectedResponse(502)) {
+            try Uploader.secureURL(status: 502, data: body("<html>Bad gateway</html>"))
+        }
+    }
+}
+
+@Suite struct TemporaryFileCleanup {
+    @Test func removesOnlyCloudDropLeftovers() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let body = TemporaryFiles.multipartBody(in: directory)
+        let dropFolder = TemporaryFiles.dropFolder(in: directory)
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        let kept = ["other.multipart", "clouddrop-notes.txt"]
+        for file in [body, dropFolder.appendingPathComponent("shot.png")] + kept.map(directory.appendingPathComponent) {
+            try Data("x".utf8).write(to: file)
+        }
+
+        TemporaryFiles.removeLeftovers(in: directory)
+
+        #expect(try fileManager.contentsOfDirectory(atPath: directory.path).sorted() == kept.sorted())
+    }
 }
 
 @Suite struct ShareLinks {
