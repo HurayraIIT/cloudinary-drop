@@ -146,8 +146,16 @@ public struct Uploader: Sendable {
 
         let input = try FileHandle(forReadingFrom: fileURL)
         defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty {
-            try output.write(contentsOf: chunk)
+        // Without the pool, every 1 MB chunk stays alive until the upload finishes.
+        var copying = true
+        while copying {
+            try autoreleasepool {
+                guard let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty else {
+                    copying = false
+                    return
+                }
+                try output.write(contentsOf: chunk)
+            }
         }
         try output.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
     }
