@@ -221,6 +221,8 @@ CONTEXT.md         Glossary: Drop, Media File, Upload, Share Link, …
 docs/adr/          Architecture decisions and what's deliberately out of scope
 ```
 
+**Working on it with an AI agent?** Point it at [AGENTS.md](AGENTS.md), which covers invariants, gotchas, Cloudinary API details and testing rules.
+
 **Design docs:**
 - The words used in the code and UI are defined in [CONTEXT.md](CONTEXT.md).
 - Why things are the way they are is recorded in [docs/adr/](docs/adr/):
