@@ -89,7 +89,7 @@ Click the icon to see:
 | Item | What it does |
 |---|---|
 | ⚠︎ *error* | The last problem from your most recent Drop. Hover for the full text. It clears when you drop something new |
-| Recent links | The last 10 Share Links, newest first, shown as `filename · time`. Hover for the URL and click to copy it again. The list is lost when the app quits |
+| Recent links | The last 10 Share Links, newest first. Each row shows a thumbnail (a film icon for videos), `filename · time`, and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL. The list is lost when the app quits |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Launch at Login | Start CloudDrop when you log in |
 | Quit CloudDrop | Quits immediately. Any unfinished uploads are dropped |
@@ -249,6 +249,9 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
-- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, and clicking copies without opening.
+- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL.
+- [ ] Each image row has a rounded square thumbnail, and each video row a film icon.
+- [ ] Hovering a row or moving with the arrow keys highlights it. Return copies the highlighted row.
+- [ ] Clicking a row or its Copy button copies without opening, closes the menu and flashes ✓. The Open button opens the link and closes the menu.
 - [ ] Turning Wi-Fi off mid-upload ends with ✗ and a network error, and the next queued file is still tried.
 - [ ] Launch at Login toggles and survives a restart.

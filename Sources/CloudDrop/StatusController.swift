@@ -186,12 +186,21 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             let time = DateFormatter()
             time.dateFormat = "HH:mm"
             for (index, entry) in queue.history.enumerated() {
-                let item = NSMenuItem(
-                    title: "\(MenuText.truncateMiddle(entry.filename)) · \(time.string(from: entry.uploadedAt))",
-                    action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
+                // The action is what Return sends for a highlighted row; clicks go through the view.
+                let item = NSMenuItem(title: entry.filename, action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
                 item.target = self
                 item.tag = index
-                item.toolTip = entry.link.absoluteString
+                item.view = HistoryRowView(
+                    entry: entry,
+                    time: time.string(from: entry.uploadedAt),
+                    onCopy: { [weak self] in
+                        self?.menu.cancelTracking()
+                        self?.queue.recopy(entry)
+                    },
+                    onOpen: { [weak self] in
+                        self?.menu.cancelTracking()
+                        NSWorkspace.shared.open(entry.link)
+                    })
                 menu.addItem(item)
             }
         }
@@ -208,6 +217,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit CloudDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        for menuItem in menu.items {
+            (menuItem.view as? HistoryRowView)?.isHighlighted = menuItem === item
+        }
     }
 
     @objc private func copyHistoryEntry(_ sender: NSMenuItem) {

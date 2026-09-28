@@ -9,8 +9,11 @@ let log = Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")
 /// One entry in the Link History.
 struct HistoryEntry {
     let filename: String
+    let kind: MediaKind
     let uploadedAt: Date
     let link: URL
+    /// Images only; videos show an icon instead.
+    let thumbnail: NSImage?
 }
 
 /// The Upload Queue: Media Files are uploaded one at a time, in the order they were dropped.
@@ -76,8 +79,10 @@ final class UploadQueue {
         }
     }
 
+    /// Copies a Link History entry again. The ✓ flash is the only sign it worked, as the menu has closed.
     func recopy(_ entry: HistoryEntry) {
         copyToClipboard(entry.link)
+        onEvent(.succeeded)
     }
 
     private func startIfNeeded() {
@@ -121,7 +126,8 @@ final class UploadQueue {
             log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
             copyToClipboard(link)
             NSWorkspace.shared.open(link)
-            history.insert(HistoryEntry(filename: job.filename, uploadedAt: Date(), link: link), at: 0)
+            let thumbnail = job.kind == .image ? await Self.thumbnail(of: job.fileURL) : nil
+            history.insert(HistoryEntry(filename: job.filename, kind: job.kind, uploadedAt: Date(), link: link, thumbnail: thumbnail), at: 0)
             history = Array(history.prefix(Self.historyLimit))
             progress = nil
             onEvent(.succeeded)
@@ -131,6 +137,14 @@ final class UploadQueue {
             lastError = "\(job.filename): \(error.localizedDescription)"
             onEvent(.failed)
         }
+    }
+
+    /// Made right after the Upload, while the file is still on disk: files received from a file promise
+    /// are deleted next. Decoding happens off the main actor so the menu bar never stalls.
+    private static func thumbnail(of fileURL: URL) async -> NSImage? {
+        let side = HistoryRowView.thumbnailSide
+        let image = await Task.detached { Thumbnail.make(imageAt: fileURL, side: Int(side * 2)) }.value
+        return image.map { NSImage(cgImage: $0, size: NSSize(width: side, height: side)) }
     }
 
     /// Swaps in a new Uploader only when the Cloudinary URL has changed.

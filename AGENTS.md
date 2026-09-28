@@ -30,7 +30,7 @@ The ADRs:
 
 - **Command Line Tools only, no Xcode.** `xcodebuild` doesn't work. Never add an `.xcodeproj`, `.xcworkspace`, asset catalogs, storyboards or anything else that needs Xcode.
 - **Swift 6.x, `swift-tools-version:6.0`, Swift 6 language mode**, so strict concurrency checking is on. The platform is `.macOS("26.0")`.
-- **No third-party dependencies.** Only Apple frameworks are used: AppKit, Foundation, CryptoKit, Security, ServiceManagement, UniformTypeIdentifiers and OSLog. Don't add Swift packages.
+- **No third-party dependencies.** Only Apple frameworks are used: AppKit, Foundation, CryptoKit, ImageIO, Security, ServiceManagement, UniformTypeIdentifiers and OSLog. Don't add Swift packages.
 - **Builds are signed ad-hoc** (`codesign --sign -`) with the identifier `com.hurayraiit.clouddrop`. Each rebuild therefore changes the code signature, and macOS asks the user again for Keychain access on the next Drop. That's expected and accepted; don't try to fix it.
 - **In zsh, `log` is a shell builtin.** Call `/usr/bin/log show …` or `/usr/bin/log stream …` explicitly.
 
@@ -63,12 +63,14 @@ Sources/
     PublicID.swift                public_id = clouddrop/<yyMMdd_HHmmss>_<4-char random>_<slug>; the slug rules
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
     ShareLink.swift               Share Link from secure_url (the HEIC/HEIF → .jpg exception); MenuText.truncateMiddle
+    Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file)
     TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
+    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename · time, Copy and Open buttons
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Link History, Last Error, logging
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save
     KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL
@@ -92,6 +94,7 @@ Makefile                          Build, bundle, sign, install, and the test wra
 5. `drain()` uploads **one at a time**. For each success:
    - `ShareLink.make` builds the Share Link
    - it's copied to the clipboard and opened with `NSWorkspace.shared.open`
+   - for an image, a thumbnail is made (off the main actor) while the file is still on disk
    - it's added to the front of the Link History, which is capped at 10
    - the ✓ flash is shown
 
@@ -122,7 +125,13 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Menu**
 - **The Last Error clears when the next Drop begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
-- **Link History is in memory only**, newest first, max 10. Each label is `truncateMiddle(filename, 30) · HH:mm` with the URL as a tooltip. Clicking copies the link and does **not** open it.
+- **Link History is in memory only**, newest first, max 10, thumbnails included; nothing is written to disk.
+- **Each entry is a `HistoryRowView`** in a fixed 360 pt menu: one 30 pt line of `[thumbnail] filename · HH:mm [Copy] [Open]`, with the Share Link as the tooltip.
+  - Images get a 22 pt square thumbnail with 4 pt rounded corners. Videos get the `film` symbol, never a preview, and undecodable images get `photo`.
+  - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
+  - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every action closes the menu, and a copy flashes ✓.
+  - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
+  - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
 - **Quit is immediate**, with no confirmation while uploads are running.
 - **No notifications and no sounds.** Feedback is the icon only.
 
@@ -189,7 +198,7 @@ These are decisions the user made during design. Changing any of them needs thei
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, slug and public_id rules, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 case), the temp-file sweep, the HEIC link, and menu truncation.
+- They cover: parsing the Cloudinary URL, slug and public_id rules, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 case), the temp-file sweep, thumbnails, the HEIC link, and menu truncation.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.

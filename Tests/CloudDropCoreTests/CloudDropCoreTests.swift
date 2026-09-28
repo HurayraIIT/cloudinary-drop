@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import Testing
 import UniformTypeIdentifiers
 @testable import CloudDropCore
@@ -162,6 +163,38 @@ import UniformTypeIdentifiers
         #expect(throws: UploadError.unexpectedResponse(502)) {
             try Uploader.secureURL(status: 502, data: body("<html>Bad gateway</html>"))
         }
+    }
+}
+
+@Suite struct Thumbnails {
+    private func writePNG(width: Int, height: Int) throws -> URL {
+        let context = try #require(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = try #require(context.makeImage())
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString).png")
+        let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return url
+    }
+
+    @Test(arguments: [(300, 100), (100, 300), (500, 500)])
+    func cropsToASquareOfTheRequestedSide(_ size: (Int, Int)) throws {
+        let url = try writePNG(width: size.0, height: size.1)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let thumbnail = try #require(Thumbnail.make(imageAt: url, side: 44))
+        #expect(thumbnail.width == 44)
+        #expect(thumbnail.height == 44)
+    }
+
+    @Test func nonImageHasNoThumbnail() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString).png")
+        try Data("not an image".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(Thumbnail.make(imageAt: url, side: 44) == nil)
     }
 }
 
