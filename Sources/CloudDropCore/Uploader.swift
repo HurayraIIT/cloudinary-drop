@@ -5,12 +5,15 @@ public enum UploadError: LocalizedError, CustomStringConvertible, Equatable, Sen
     case cloudinary(String)
     /// A 403. The menu explains it in plain words; Cloudinary's own message is kept for the log.
     case notAllowedToUpload(cloudinaryMessage: String?)
+    /// Cloudinary already has a file at this public_id. Uploads never overwrite, so an older Share Link keeps its file.
+    case nameTaken(publicID: String)
     case unexpectedResponse(Int)
 
     public var errorDescription: String? {
         switch self {
         case let .cloudinary(message): message
         case .notAllowedToUpload: "This API key isn't allowed to upload (it lacks Cloudinary's \"create\" permission). Use a key with upload access."
+        case .nameTaken: "Its random name was already taken, drop it again"
         case let .unexpectedResponse(status): "Cloudinary answered with HTTP \(status)"
         }
     }
@@ -19,8 +22,21 @@ public enum UploadError: LocalizedError, CustomStringConvertible, Equatable, Sen
     public var description: String {
         switch self {
         case let .notAllowedToUpload(message?): "\(errorDescription ?? "") Cloudinary said: \(message) (HTTP 403)"
+        case let .nameTaken(publicID): "\(errorDescription ?? "") (\(publicID))"
         default: errorDescription ?? ""
         }
+    }
+}
+
+/// What Cloudinary stored for an Upload: enough to build its Share Link.
+public struct UploadedFile: Equatable, Sendable {
+    public let publicID: String
+    /// The file's extension as Cloudinary knows it, e.g. `png`, `heic` or `mov`.
+    public let format: String
+
+    public init(publicID: String, format: String) {
+        self.publicID = publicID
+        self.format = format
     }
 }
 
@@ -57,15 +73,19 @@ public struct Uploader: Sendable {
         session.finishTasksAndInvalidate()
     }
 
-    /// Uploads one Media File and returns its `secure_url`.
+    /// Uploads one Media File. `displayName` is the name the Cloudinary console shows, since the
+    /// public_id no longer carries the original filename.
     public func upload(
         fileURL: URL,
         kind: MediaKind,
         publicID: String,
+        displayName: String,
         progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> URL {
+    ) async throws -> UploadedFile {
         var params = [
-            "asset_folder": PublicID.folder,
+            "asset_folder": PublicID.assetFolder,
+            "display_name": displayName,
+            "overwrite": "false",
             "public_id": publicID,
             "timestamp": String(Int(Date().timeIntervalSince1970)),
         ]
@@ -83,14 +103,16 @@ public struct Uploader: Sendable {
 
         let (data, response) = try await session.upload(
             for: request, fromFile: bodyURL, delegate: ProgressDelegate(onProgress: progress))
-        return try Self.secureURL(status: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
+        return try Self.uploadedFile(status: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
     }
 
-    /// Reads Cloudinary's answer to an upload: the `secure_url`, or the error to show.
-    static func secureURL(status: Int, data: Data) throws -> URL {
+    /// Reads Cloudinary's answer to an upload: what it stored, or the error to show.
+    /// With `overwrite=false`, a taken public_id still answers 200, describing the *old* file with `existing: true`.
+    static func uploadedFile(status: Int, data: Data) throws -> UploadedFile {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        if status == 200, let secure = json?["secure_url"] as? String, let url = URL(string: secure) {
-            return url
+        if status == 200, let publicID = json?["public_id"] as? String, let format = json?["format"] as? String {
+            if json?["existing"] as? Bool == true { throw UploadError.nameTaken(publicID: publicID) }
+            return UploadedFile(publicID: publicID, format: format)
         }
         let message = errorMessage(in: data)
         if status == 403 { throw UploadError.notAllowedToUpload(cloudinaryMessage: message) }

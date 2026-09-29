@@ -27,7 +27,7 @@ The Media Files waiting to be uploaded, sent one at a time in the order they wer
 _Avoid_: Batch, job list
 
 **Share Link**:
-The public URL of an uploaded Media File, pointing to the original file byte-for-byte, except that a HEIC image's Share Link delivers it as JPEG so any browser can show it. After each successful Upload it is opened in the default browser and placed on the clipboard, so the clipboard holds the latest one.
+The short public URL of an uploaded Media File, pointing to the original file byte-for-byte, except that a HEIC image's Share Link delivers it as JPEG so any browser can show it. It uses a random name that never reveals the original filename, and never changes what it points to. After each successful Upload it is opened in the default browser and placed on the clipboard, so the clipboard holds the latest one.
 _Avoid_: URL, public link, delivery URL
 
 ### What the menu shows

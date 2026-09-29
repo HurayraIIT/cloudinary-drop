@@ -115,15 +115,20 @@ Click the icon to see:
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
 | Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown |
 
-**Where files end up:** in the `clouddrop` folder of your Cloudinary account, named with a timestamp, a random suffix and the original filename:
+**Where files end up:** each file gets a random 8-character name in the `d/` folder, so links are short and never reveal the original filename:
 
 ```
+Screenshot 2026-09-29 at 12.31.45.png
+→ https://res.cloudinary.com/<cloud>/d/k3f9x2ab.png
+
 Screen Recording 2026-09-28 at 14.15.03.mov
-→ https://res.cloudinary.com/<cloud>/video/upload/v…/clouddrop/260928_141503_k3f9_screen-recording-2026-09-28-at-14-15-03.mov
+→ https://res.cloudinary.com/<cloud>/video/upload/d/k3f9x2ab.mov
 ```
 
-- The random suffix makes links hard to guess and stops two uploads with the same filename from colliding.
-- Filenames are lowercased, and anything other than `a–z 0–9 _ -` becomes `-`. The name part is capped at 40 characters.
+- Video links keep `/video/upload/`, because Cloudinary only allows the shorter form for images.
+- In the Cloudinary console, the files sit in the `clouddrop` folder and show their original filename.
+- The random name makes links hard to guess. CloudDrop never replaces an existing file. If a name is somehow already taken, that Upload fails with "Its random name was already taken, drop it again", and the old link keeps its file.
+- Links made before this change (`…/clouddrop/260928_…`) keep working.
 
 **What the link points to:** the Share Link is the original file, byte for byte. The one exception is **HEIC photos**, which get a `.jpg` link so they display in every browser. Cloudinary converts them when the link is first opened.
 
@@ -243,6 +248,8 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] ⌘V pastes into the settings field.
 - [ ] Dragging a PNG over the icon highlights it. Dragging only a PDF does not.
 - [ ] Dropping a PNG shows `↑ n%`, then ✓. The link opens in the browser and is on the clipboard.
+- [ ] An image link looks like `…/<cloud>/d/k3f9x2ab.png` and a video link like `…/<cloud>/video/upload/d/k3f9x2ab.mov`, with no `v…` version.
+- [ ] In the Cloudinary console, a new upload is in the `clouddrop` folder and shows its original filename.
 - [ ] Dropping the floating screenshot thumbnail works like a PNG.
 - [ ] A HEIC photo's link ends in `.jpg` and displays in Chrome.
 - [ ] A screen recording (`.mov`, 10–100 MB) uploads and plays in the browser.

@@ -1,15 +1,16 @@
 import Foundation
 
 public enum ShareLink {
-    /// The Share Link for an uploaded file's `secure_url`: the original, except HEIC/HEIF,
-    /// which is delivered as JPEG so every browser can show it.
-    public static func make(secureURL: URL) -> URL {
-        switch secureURL.pathExtension.lowercased() {
-        case "heic", "heif":
-            secureURL.deletingPathExtension().appendingPathExtension("jpg")
-        default:
-            secureURL
+    /// The Share Link for an Upload, built from what Cloudinary stored rather than its `secure_url` (ADR 0005).
+    /// It has no version, because a name is never reused, and images drop `/image/upload`, which Cloudinary
+    /// assumes when it's missing. HEIC/HEIF is delivered as JPEG so every browser can show it.
+    public static func make(cloudName: String, kind: MediaKind, file: UploadedFile) -> URL {
+        let format = file.format.lowercased()
+        let path = switch kind {
+        case .image: "\(file.publicID).\(["heic", "heif"].contains(format) ? "jpg" : format)"
+        case .video: "video/upload/\(file.publicID).\(format)"
         }
+        return URL(string: "https://res.cloudinary.com/\(cloudName)/\(path)")!
     }
 }
 

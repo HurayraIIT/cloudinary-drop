@@ -111,18 +111,19 @@ final class UploadQueue {
         let number = uploadNumber
         progress = 0
         onEvent(.changed)
-        let publicID = PublicID.make(originalFilename: job.filename)
+        let publicID = PublicID.make()
         log.info("Uploading \(job.fileURL.path, privacy: .public) as \(job.kind.rawValue, privacy: .public) \(publicID, privacy: .public)")
 
         do {
-            let secureURL = try await uploader(for: credentials).upload(
+            let file = try await uploader(for: credentials).upload(
                 fileURL: job.fileURL,
                 kind: job.kind,
                 publicID: publicID,
+                displayName: job.filename,
                 progress: { [weak self] fraction in
                     Task { @MainActor in self?.report(progress: fraction, upload: number) }
                 })
-            let link = ShareLink.make(secureURL: secureURL)
+            let link = ShareLink.make(cloudName: credentials.cloudName, kind: job.kind, file: file)
             log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
             copyToClipboard(link)
             NSWorkspace.shared.open(link)

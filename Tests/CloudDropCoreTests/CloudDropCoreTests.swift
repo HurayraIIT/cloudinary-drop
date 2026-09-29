@@ -36,40 +36,18 @@ import UniformTypeIdentifiers
 }
 
 @Suite struct PublicIDNaming {
-    @Test func screenRecordingName() {
-        #expect(PublicID.slug(fromFilename: "Screen Recording 2026-09-28 at 14.15.03.mov")
-            == "screen-recording-2026-09-28-at-14-15-03")
+    @Test func nameGoesInTheShortFolder() {
+        #expect(PublicID.make(name: "k3f9x2ab") == "d/k3f9x2ab")
     }
 
-    @Test func nameWithNoUsableCharactersIsEmpty() {
-        #expect(PublicID.slug(fromFilename: "ছবি.png") == "")
+    @Test func randomNameIsEightSafeCharacters() {
+        let name = PublicID.randomName()
+        #expect(name.count == 8)
+        #expect(name.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) })
     }
 
-    @Test func collapsesAndTrimsSeparators() {
-        #expect(PublicID.slug(fromFilename: "  --Hello   World!!--.JPG") == "hello-world")
-    }
-
-    @Test func capsAtFortyCharactersWithoutTrailingHyphen() {
-        let slug = PublicID.slug(fromFilename: String(repeating: "a", count: 39) + " b c d.png")
-        #expect(slug.count <= PublicID.maxSlugLength)
-        #expect(!slug.hasSuffix("-"))
-        #expect(slug == String(repeating: "a", count: 39))
-    }
-
-    @Test func fullPublicID() throws {
-        let date = try #require(Calendar(identifier: .gregorian).date(from: DateComponents(
-            timeZone: TimeZone(identifier: "UTC"), year: 2026, month: 9, day: 28, hour: 14, minute: 15, second: 3)))
-        let utc = try #require(TimeZone(identifier: "UTC"))
-        #expect(PublicID.make(originalFilename: "Screenshot.png", date: date, randomSuffix: "k3f9", timeZone: utc)
-            == "clouddrop/260928_141503_k3f9_screenshot")
-        #expect(PublicID.make(originalFilename: "ছবি.heic", date: date, randomSuffix: "k3f9", timeZone: utc)
-            == "clouddrop/260928_141503_k3f9")
-    }
-
-    @Test func randomSuffixIsShortAndSafe() {
-        let suffix = PublicID.randomSuffix()
-        #expect(suffix.count == 4)
-        #expect(suffix.allSatisfy { $0.isLowercase || $0.isNumber })
+    @Test func randomNamesDiffer() {
+        #expect(Set((0..<100).map { _ in PublicID.randomName() }).count == 100)
     }
 }
 
@@ -80,8 +58,14 @@ import UniformTypeIdentifiers
     }
 
     @Test func signsOurUploadParametersInSortedOrder() {
-        let params = ["timestamp": "1790000000", "public_id": "clouddrop/260928_141503_k3f9_shot", "asset_folder": "clouddrop"]
-        #expect(uploadSignature(params, secret: "secret123") == "0bdc6dcae76cd7cf0eb01559f56c534c32f07ada")
+        let params = [
+            "timestamp": "1790000000",
+            "public_id": "d/k3f9x2ab",
+            "overwrite": "false",
+            "display_name": "Screenshot 2026-09-29 at 12.31.45.png",
+            "asset_folder": "clouddrop",
+        ]
+        #expect(uploadSignature(params, secret: "secret123") == "7c33e9d1db84482f9f8fa9a2621a0245e03c35e2")
     }
 }
 
@@ -137,15 +121,35 @@ import UniformTypeIdentifiers
 @Suite struct UploadResponses {
     private func body(_ json: String) -> Data { Data(json.utf8) }
 
-    @Test func successReturnsSecureURL() throws {
-        let url = try Uploader.secureURL(status: 200, data: body(#"{"secure_url":"https://res.cloudinary.com/c/image/upload/v1/clouddrop/x.png"}"#))
-        #expect(url.absoluteString == "https://res.cloudinary.com/c/image/upload/v1/clouddrop/x.png")
+    @Test func successReturnsWhatWasStored() throws {
+        let file = try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"png","secure_url":"https://res.cloudinary.com/c/image/upload/v1/d/k3f9x2ab.png"}"#))
+        #expect(file == UploadedFile(publicID: "d/k3f9x2ab", format: "png"))
+    }
+
+    @Test func takenNameIsAFailureNotTheOldFile() {
+        #expect(throws: UploadError.nameTaken(publicID: "d/k3f9x2ab")) {
+            try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"png","existing":true}"#))
+        }
+        let error: any Error = UploadError.nameTaken(publicID: "d/k3f9x2ab")
+        #expect(error.localizedDescription == "Its random name was already taken, drop it again")
+        #expect(String(describing: error).contains("d/k3f9x2ab"))
+    }
+
+    @Test func freshUploadMarkedNotExistingSucceeds() throws {
+        let file = try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"mov","existing":false}"#))
+        #expect(file.format == "mov")
+    }
+
+    @Test func successWithoutPublicIDIsUnexpected() {
+        #expect(throws: UploadError.unexpectedResponse(200)) {
+            try Uploader.uploadedFile(status: 200, data: body(#"{"secure_url":"https://res.cloudinary.com/c/image/upload/v1/d/x.png"}"#))
+        }
     }
 
     @Test func forbiddenKeepsCloudinaryMessageForTheLog() {
         let raw = #"missing permissions (actions=["create"])"#
         #expect(throws: UploadError.notAllowedToUpload(cloudinaryMessage: raw)) {
-            try Uploader.secureURL(status: 403, data: body(#"{"error":{"message":"missing permissions (actions=[\"create\"])"}}"#))
+            try Uploader.uploadedFile(status: 403, data: body(#"{"error":{"message":"missing permissions (actions=[\"create\"])"}}"#))
         }
         let error: any Error = UploadError.notAllowedToUpload(cloudinaryMessage: raw)
         #expect(error.localizedDescription.contains("isn't allowed to upload"))
@@ -155,13 +159,13 @@ import UniformTypeIdentifiers
 
     @Test func otherErrorsShowCloudinaryMessageAndStatus() {
         #expect(throws: UploadError.cloudinary("Invalid image file (HTTP 400)")) {
-            try Uploader.secureURL(status: 400, data: body(#"{"error":{"message":"Invalid image file"}}"#))
+            try Uploader.uploadedFile(status: 400, data: body(#"{"error":{"message":"Invalid image file"}}"#))
         }
     }
 
     @Test func unreadableAnswerReportsStatus() {
         #expect(throws: UploadError.unexpectedResponse(502)) {
-            try Uploader.secureURL(status: 502, data: body("<html>Bad gateway</html>"))
+            try Uploader.uploadedFile(status: 502, data: body("<html>Bad gateway</html>"))
         }
     }
 }
@@ -220,16 +224,20 @@ import UniformTypeIdentifiers
 }
 
 @Suite struct ShareLinks {
-    @Test func originalsAreUntouched() throws {
-        let url = try #require(URL(string: "https://res.cloudinary.com/djasqoair/video/upload/v1/clouddrop/x.mov"))
-        #expect(ShareLink.make(secureURL: url) == url)
+    @Test func imageUsesTheRootPathWithoutVersion() {
+        #expect(ShareLink.make(cloudName: "djasqoair", kind: .image, file: UploadedFile(publicID: "d/k3f9x2ab", format: "png")).absoluteString
+            == "https://res.cloudinary.com/djasqoair/d/k3f9x2ab.png")
+    }
+
+    @Test func videoKeepsItsTypeButNoVersion() {
+        #expect(ShareLink.make(cloudName: "djasqoair", kind: .video, file: UploadedFile(publicID: "d/k3f9x2ab", format: "mov")).absoluteString
+            == "https://res.cloudinary.com/djasqoair/video/upload/d/k3f9x2ab.mov")
     }
 
     @Test(arguments: ["heic", "HEIC", "heif"])
-    func heicIsDeliveredAsJPEG(_ ext: String) throws {
-        let url = try #require(URL(string: "https://res.cloudinary.com/djasqoair/image/upload/v1/clouddrop/260928_141503_k3f9_img.\(ext)"))
-        #expect(ShareLink.make(secureURL: url).absoluteString
-            == "https://res.cloudinary.com/djasqoair/image/upload/v1/clouddrop/260928_141503_k3f9_img.jpg")
+    func heicIsDeliveredAsJPEG(_ format: String) {
+        #expect(ShareLink.make(cloudName: "djasqoair", kind: .image, file: UploadedFile(publicID: "d/k3f9x2ab", format: format)).absoluteString
+            == "https://res.cloudinary.com/djasqoair/d/k3f9x2ab.jpg")
     }
 }
 

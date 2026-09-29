@@ -23,6 +23,7 @@ The ADRs:
 - **0002:** the Cloudinary URL is pasted once and stored in the Keychain. Reading `~/.zshrc` and using an unsigned preset were rejected.
 - **0003:** signed uploads go straight to Cloudinary, with no server. The Free-plan Size Limits are enforced on the Mac.
 - **0004:** the explicit list of things that are out of scope.
+- **0005:** short Share Links: random `d/<8 chars>` names, links built from the public_id (root path for images, no version), and uploads that never overwrite.
 
 `CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0005-…`) and keep it to a paragraph or two.
 
@@ -60,9 +61,9 @@ Only run `make install` when it's appropriate. It replaces the app the user is a
 Sources/
   CloudDropCore/                  Library target. Foundation-level logic, all unit-tested. No AppKit.
     CloudinaryCredentials.swift   Parses a Cloudinary URL (tolerates `export CLOUDINARY_URL="…"`, quotes, whitespace, ?query)
-    PublicID.swift                public_id = clouddrop/<yyMMdd_HHmmss>_<4-char random>_<slug>; the slug rules
+    PublicID.swift                public_id = d/<8 random a-z0-9>; the URL folder vs the console folder
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
-    ShareLink.swift               Share Link from secure_url (the HEIC/HEIF → .jpg exception); MenuText.truncateMiddle
+    ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file)
     TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
@@ -112,16 +113,14 @@ These are decisions the user made during design. Changing any of them needs thei
 - **Accepted types:** `UTType` conforming to `.image` → image, `.movie` → video. Everything else is refused.
 
 **Naming and links**
-- **The public_id format** is `clouddrop/260928_141503_k3f9_<slug>`. The slug rule, in order:
-  1. drop the extension
-  2. lowercase
-  3. turn anything outside `a-z0-9_-` into `-`
-  4. collapse runs of `-`
-  5. trim `-` from both ends
-  6. cap at 40 characters, then trim again
-
-  An empty slug means no trailing `_`. The timestamp is local time.
-- **Share Link = Cloudinary's `secure_url`, byte-for-byte**, except `.heic`/`.heif`, which become `.jpg`. Don't add `f_auto`, `q_auto` or other transformations.
+- **The public_id format** is `d/<8 random a-z0-9>`, e.g. `d/k3f9x2ab`. The original filename never appears in it. It's sent as `display_name` instead, so the console still shows it (see [ADR 0005](docs/adr/0005-short-share-links.md)).
+- **The Share Link is built from the response's `public_id` and `format`, not from `secure_url`:**
+  - images: `https://res.cloudinary.com/<cloud>/d/<name>.<format>`, the root path URL form
+  - videos: `https://res.cloudinary.com/<cloud>/video/upload/d/<name>.<format>`, because the root path form 404s for videos
+  - there's never a version segment
+  - `.heic`/`.heif` become `.jpg`
+  - Don't add `f_auto`, `q_auto` or other transformations.
+- **Uploads never overwrite.** They're sent with `overwrite=false`. On a taken name, Cloudinary answers **200** describing the *old* file with `"existing": true`, and `Uploader.uploadedFile` turns that into `UploadError.nameTaken`. Without this check, the new Upload would get the old file's link. Leaving the version out is only safe because of this: a default overwrite serves the new bytes even at the old versioned URL.
 
 **Menu**
 - **The Last Error clears when the next Drop begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
@@ -143,10 +142,12 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Signed upload**
 - Endpoint: `POST https://api.cloudinary.com/v1_1/<cloud>/<image|video>/upload`, multipart. The resource type is explicit, not `auto`.
-- Signed params: `asset_folder`, `public_id` and `timestamp`. The signature is SHA-1 of the sorted `k=v` pairs joined by `&`, followed by the secret. `api_key`, `signature` and `file` are **not** signed. The signing test includes the example from Cloudinary's docs.
+- Signed params: `asset_folder`, `display_name`, `overwrite`, `public_id` and `timestamp`. The signature is SHA-1 of the sorted `k=v` pairs joined by `&`, followed by the secret. `api_key`, `signature` and `file` are **not** signed. The signing test includes the example from Cloudinary's docs.
 - **The account uses dynamic folder mode.** The legacy `folder` param would only set the console folder, not the URL path. So we send **both**:
   - `asset_folder=clouddrop` for the console folder
-  - `public_id=clouddrop/…` for the URL path
+  - `public_id=d/…` for the URL path
+
+  They're independent on purpose: a short URL path, and a readable console folder that also holds the uploads made before ADR 0005.
 
   Don't switch to `folder`.
 
@@ -198,7 +199,7 @@ These are decisions the user made during design. Changing any of them needs thei
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, slug and public_id rules, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 case), the temp-file sweep, thumbnails, the HEIC link, and menu truncation.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails, Share Link shapes (image, video, HEIC), and menu truncation.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
