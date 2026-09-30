@@ -33,10 +33,13 @@ public struct UploadedFile: Equatable, Sendable {
     public let publicID: String
     /// The file's extension as Cloudinary knows it, e.g. `png`, `heic` or `mov`.
     public let format: String
+    /// When Cloudinary stored it, by Cloudinary's clock. The Link History is sorted by this.
+    public let createdAt: Date?
 
-    public init(publicID: String, format: String) {
+    public init(publicID: String, format: String, createdAt: Date? = nil) {
         self.publicID = publicID
         self.format = format
+        self.createdAt = createdAt
     }
 }
 
@@ -112,7 +115,8 @@ public struct Uploader: Sendable {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         if status == 200, let publicID = json?["public_id"] as? String, let format = json?["format"] as? String {
             if json?["existing"] as? Bool == true { throw UploadError.nameTaken(publicID: publicID) }
-            return UploadedFile(publicID: publicID, format: format)
+            let createdAt = (json?["created_at"] as? String).flatMap { try? Date($0, strategy: .iso8601) }
+            return UploadedFile(publicID: publicID, format: format, createdAt: createdAt)
         }
         let message = errorMessage(in: data)
         if status == 403 { throw UploadError.notAllowedToUpload(cloudinaryMessage: message) }
@@ -165,7 +169,7 @@ public struct Uploader: Sendable {
         }
     }
 
-    private static func errorMessage(in data: Data) -> String? {
+    static func errorMessage(in data: Data) -> String? {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return (json?["error"] as? [String: Any])?["message"] as? String
     }

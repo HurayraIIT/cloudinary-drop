@@ -140,6 +140,11 @@ import UniformTypeIdentifiers
         #expect(file.format == "mov")
     }
 
+    @Test func keepsCloudinarysUploadTime() throws {
+        let file = try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"png","created_at":"2026-09-30T06:44:46Z"}"#))
+        #expect(file.createdAt == Date(timeIntervalSince1970: 1_790_750_686))
+    }
+
     @Test func successWithoutPublicIDIsUnexpected() {
         #expect(throws: UploadError.unexpectedResponse(200)) {
             try Uploader.uploadedFile(status: 200, data: body(#"{"secure_url":"https://res.cloudinary.com/c/image/upload/v1/d/x.png"}"#))
@@ -252,5 +257,164 @@ import UniformTypeIdentifiers
         #expect(label.hasPrefix("Screenshot 202"))
         #expect(label.hasSuffix("14.15.03.png"))
         #expect(label.contains("…"))
+    }
+}
+
+@Suite struct LinkHistorySearch {
+    private let credentials = CloudinaryCredentials(apiKey: "123", apiSecret: "abc", cloudName: "djasqoair")
+
+    private func entries(_ json: String, status: Int = 200, reset: String? = nil) throws -> [HistoryEntry] {
+        try HistorySearch.entries(status: status, data: Data(json.utf8), rateLimitReset: reset, cloudName: "djasqoair")
+    }
+
+    private func entry(_ id: String, at seconds: TimeInterval) -> HistoryEntry {
+        HistoryEntry(publicID: id, kind: .image, filename: "\(id).png", uploadedAt: Date(timeIntervalSince1970: seconds),
+                     shareLink: URL(string: "https://res.cloudinary.com/djasqoair/\(id).png")!)
+    }
+
+    @Test func searchesTheCloudDropFolderNewestFirst() throws {
+        let request = HistorySearch.request(credentials: credentials, limit: 10)
+        #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/resources/search")
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic MTIzOmFiYw==")
+        let data = try #require(request.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["expression"] as? String == "asset_folder=clouddrop")
+        #expect(body["sort_by"] as? [[String: String]] == [["created_at": "desc"]])
+        #expect(body["max_results"] as? Int == 10)
+    }
+
+    @Test func readsImagesAndVideosIntoShareLinks() throws {
+        let list = try entries(#"""
+        {"total_count":3,"resources":[
+          {"public_id":"d/gqpnfwdn","format":"png","resource_type":"image","created_at":"2026-09-30T06:44:46Z","display_name":"SCR-20260930-llhf.png"},
+          {"public_id":"d/l8vo1m5o","format":"mov","resource_type":"video","created_at":"2026-09-29T17:20:41Z","display_name":"Screen Recording.mov"},
+          {"public_id":"clouddrop/260928_101500_ab12_shot","format":"heic","resource_type":"image","created_at":"2026-09-28T10:15:00Z","display_name":""}
+        ]}
+        """#)
+        #expect(list.map(\.shareLink.absoluteString) == [
+            "https://res.cloudinary.com/djasqoair/d/gqpnfwdn.png",
+            "https://res.cloudinary.com/djasqoair/video/upload/d/l8vo1m5o.mov",
+            "https://res.cloudinary.com/djasqoair/clouddrop/260928_101500_ab12_shot.jpg",
+        ])
+        #expect(list.map(\.kind) == [.image, .video, .image])
+        #expect(list[0].uploadedAt == Date(timeIntervalSince1970: 1_790_750_686))
+        #expect(list[0].filename == "SCR-20260930-llhf.png")
+        #expect(list[2].filename == "260928_101500_ab12_shot", "an empty display_name falls back to the public_id's last part")
+    }
+
+    @Test func skipsAnythingThatIsntAnImageOrVideo() throws {
+        let list = try entries(#"{"resources":[{"public_id":"d/notes","format":"txt","resource_type":"raw","created_at":"2026-09-30T06:44:46Z"}]}"#)
+        #expect(list.isEmpty)
+    }
+
+    @Test func forbiddenMeansTheKeyCantList() {
+        #expect(throws: HistoryFetchError.notAllowedToList(cloudinaryMessage: "missing permissions")) {
+            try entries(#"{"error":{"message":"missing permissions"}}"#, status: 403)
+        }
+    }
+
+    @Test(arguments: [420, 429])
+    func rateLimitSaysWhenItResets(_ status: Int) {
+        #expect(throws: HistoryFetchError.rateLimited(until: Date(timeIntervalSince1970: 1_790_751_600))) {
+            try entries(#"{"error":{"message":"Rate Limit Exceeded"}}"#, status: status, reset: "Wed, 30 Sep 2026 07:00:00 GMT")
+        }
+        #expect(throws: HistoryFetchError.rateLimited(until: nil)) {
+            try entries("{}", status: status)
+        }
+    }
+
+    @Test func otherFailures() {
+        #expect(throws: HistoryFetchError.cloudinary("Cloudinary rejected the API key or secret")) { try entries("{}", status: 401) }
+        #expect(throws: HistoryFetchError.cloudinary("Bad expression (HTTP 400)")) {
+            try entries(#"{"error":{"message":"Bad expression"}}"#, status: 400)
+        }
+        #expect(throws: HistoryFetchError.unexpectedResponse(502)) { try entries("<html>", status: 502) }
+        #expect(throws: HistoryFetchError.unexpectedResponse(200)) { try entries("{}") }
+    }
+
+    @Test func ownUploadShowsBeforeSearchListsIt() {
+        let fetched = [entry("d/old", at: 100)]
+        let mine = [entry("d/new", at: 200)]
+        #expect(HistorySearch.combine(fetched: fetched, unconfirmed: mine).map(\.publicID) == ["d/new", "d/old"])
+    }
+
+    @Test func combinedListIsSortedDeduplicatedAndCapped() {
+        let fetched = (0..<10).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
+        let mine = [entry("d/f3", at: 970), entry("d/mine", at: 955)]
+        let combined = HistorySearch.combine(fetched: fetched, unconfirmed: mine)
+        #expect(combined.count == 10)
+        #expect(combined.map(\.publicID).filter { $0 == "d/f3" }.count == 1)
+        #expect(combined[5].publicID == "d/mine")
+        #expect(combined.last?.publicID == "d/f8")
+    }
+
+    @Test func ownUploadIsDroppedOnceSearchListsIt() {
+        let mine = [entry("d/new", at: 200)]
+        #expect(HistorySearch.stillUnconfirmed(mine, fetched: [entry("d/new", at: 200)], fetchStartedAt: Date(timeIntervalSince1970: 205)).isEmpty)
+    }
+
+    @Test func ownUploadWaitsForSearchToCatchUpButNotForever() {
+        let mine = [entry("d/new", at: 200)]
+        #expect(HistorySearch.stillUnconfirmed(mine, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 205)) == mine)
+        #expect(HistorySearch.stillUnconfirmed(mine, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
+    }
+}
+
+@Suite struct HistoryTimeLabels {
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    /// Wednesday 30 Sep 2026, 14:30 UTC.
+    private let now = Date(timeIntervalSince1970: 1_790_778_600)
+
+    private func label(hoursAgo hours: Double) -> String {
+        HistoryTime.label(for: now.addingTimeInterval(-hours * 3600), now: now, calendar: calendar)
+    }
+
+    @Test func todayShowsTheTime() {
+        #expect(label(hoursAgo: 0.5) == "14:00")
+        #expect(label(hoursAgo: 14) == "00:30")
+    }
+
+    @Test func yesterday() {
+        #expect(label(hoursAgo: 15) == "Yesterday")
+    }
+
+    @Test func thisWeekShowsTheDay() {
+        #expect(label(hoursAgo: 48) == "Mon")
+        #expect(label(hoursAgo: 24 * 6) == "Thu")
+    }
+
+    @Test func olderShowsTheDate() {
+        #expect(label(hoursAgo: 24 * 8) == "22 Sep")
+        #expect(label(hoursAgo: 24 * 365) == "30 Sep 2025")
+    }
+
+    @Test func tooltipShowsDateAndTime() {
+        #expect(HistoryTime.full(now, calendar: calendar) == "30 Sep 2026 at 14:30")
+    }
+}
+
+@Suite struct CloudinaryThumbnails {
+    @Test func cropsOnCloudinaryAsJPEG() {
+        #expect(Thumbnail.url(cloudName: "djasqoair", publicID: "d/k3f9x2ab", side: 44).absoluteString
+            == "https://res.cloudinary.com/djasqoair/image/upload/c_fill,w_44,h_44/d/k3f9x2ab.jpg")
+    }
+
+    @Test func decodesImageDataOnly() throws {
+        let context = try #require(CGContext(
+            data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let data = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil))
+        let image = try #require(context.makeImage())
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        #expect(Thumbnail.decode(data as Data)?.width == 4)
+        #expect(Thumbnail.decode(Data("<html>".utf8)) == nil)
     }
 }

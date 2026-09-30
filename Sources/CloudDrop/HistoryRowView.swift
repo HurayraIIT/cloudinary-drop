@@ -1,4 +1,5 @@
 import AppKit
+import CloudDropCore
 
 /// One Link History entry in the menu: thumbnail, filename · time, and Copy / Open buttons.
 /// A view in a menu item draws its own highlight; `StatusController` sets `isHighlighted`
@@ -16,31 +17,27 @@ final class HistoryRowView: NSView {
     }
 
     private let thumbnail = NSImageView()
-    private let isPlaceholder: Bool
+    private var isPlaceholder = true
     private let title: NSTextField
     private let time: NSTextField
     private let copyButton: RowButton
     private let openButton: RowButton
     private let onCopy: () -> Void
 
-    init(entry: HistoryEntry, time timeText: String, onCopy: @escaping () -> Void, onOpen: @escaping () -> Void) {
+    init(entry: HistoryEntry, thumbnail image: NSImage?, time timeText: String, fullTime: String,
+         onCopy: @escaping () -> Void, onOpen: @escaping () -> Void) {
         self.onCopy = onCopy
-        isPlaceholder = entry.thumbnail == nil
         title = NSTextField(labelWithString: entry.filename)
         time = NSTextField(labelWithString: "· \(timeText)")
         copyButton = RowButton(symbol: "doc.on.doc", label: "Copy Link", action: onCopy)
         openButton = RowButton(symbol: "arrow.up.right.square", label: "Open in Browser", action: onOpen)
         super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 30))
         autoresizingMask = .width
-        toolTip = entry.link.absoluteString
+        toolTip = "\(entry.shareLink.absoluteString)\n\(fullTime)"
         setAccessibilityLabel("\(entry.filename), \(timeText)")
 
-        if let image = entry.thumbnail {
-            thumbnail.image = image
-            thumbnail.imageScaling = .scaleProportionallyUpOrDown
-            thumbnail.wantsLayer = true
-            thumbnail.layer?.cornerRadius = 4
-            thumbnail.layer?.masksToBounds = true
+        if let image {
+            setThumbnail(image)
         } else {
             thumbnail.image = NSImage(systemSymbolName: entry.kind == .video ? "film" : "photo", accessibilityDescription: nil)
             thumbnail.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
@@ -78,6 +75,17 @@ final class HistoryRowView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Also called when a thumbnail from Cloudinary arrives while the menu is open.
+    func setThumbnail(_ image: NSImage) {
+        isPlaceholder = false
+        thumbnail.image = image
+        thumbnail.contentTintColor = nil
+        thumbnail.imageScaling = .scaleProportionallyUpOrDown
+        thumbnail.wantsLayer = true
+        thumbnail.layer?.cornerRadius = 4
+        thumbnail.layer?.masksToBounds = true
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         guard isHighlighted else { return }

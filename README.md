@@ -58,6 +58,8 @@ cloudinary://<api_key>:<api_secret>@<cloud_name>
 ```
 
 > **The key must be allowed to upload.** Cloudinary can restrict what each API key may do. A read-only key is a valid key, but every upload fails with *"missing permissions (actions=["create"])"*. CloudDrop checks for this when you save, and refuses a key that can't upload.
+>
+> It also checks that the key may **list** uploads (Cloudinary's Search API), which the menu's recent links need. A key that can upload but not list is still saved, with a warning, and the menu then only shows what this Mac uploaded.
 
 ### 2. Paste it into CloudDrop
 
@@ -89,7 +91,9 @@ Click the icon to see:
 | Item | What it does |
 |---|---|
 | ⚠︎ *error* | The last problem from your most recent Drop. Hover for the full text. It clears when you drop something new |
-| Recent links | The last 10 Share Links, newest first. Each row shows a thumbnail (a film icon for videos), `filename · time`, and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL. The list is lost when the app quits |
+| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), `filename · time` (`14:02` today, then `Yesterday`, `Mon`, `12 Sep`), and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL and the full date. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
+| Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
+| Link History paused until HH:mm | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Launch at Login | Start CloudDrop when you log in |
 | Quit CloudDrop | Quits immediately. Any unfinished uploads are dropped |
@@ -144,7 +148,7 @@ git pull
 make install
 ```
 
-After each rebuild, your next Drop makes macOS ask whether CloudDrop may use its Keychain item. Choose **Always Allow**. This happens because local builds are signed ad-hoc, so each build looks like a new app to macOS (see [ADR 0002](docs/adr/0002-cloudinary-url-in-keychain.md)).
+After each rebuild, macOS asks whether CloudDrop may use its Keychain item as soon as the new build launches, because it loads the recent links straight away. Choose **Always Allow**. This happens because local builds are signed ad-hoc, so each build looks like a new app to macOS (see [ADR 0002](docs/adr/0002-cloudinary-url-in-keychain.md)).
 
 **Uninstall:**
 
@@ -173,6 +177,9 @@ The key or secret is wrong, or it has been revoked. Copy the Cloudinary URL agai
 
 **A file was refused as too large.**
 Images must be 10 MB or less and videos 100 MB or less. Compress the file first.
+
+**An upload from the other Mac isn't in the menu yet.**
+The list refreshes when you open the menu, but not more than once every 30 seconds, and Cloudinary can take a few seconds to list a new upload. Close the menu and open it again a little later. If the menu says "Couldn't refresh Link History", hover over that line to see why.
 
 **No Keychain prompt appeared.**
 That's expected. The prompt only appears after a rebuild.
@@ -217,9 +224,10 @@ make clean
 ```
 Sources/
   CloudDropCore/   Pure logic, unit-tested: Cloudinary URL parsing, naming,
-                   signing, size limits, Share Links, the upload request
+                   signing, size limits, Share Links, the upload request,
+                   the Link History search
   CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
-                   menu, settings window, Keychain, Launch at Login
+                   Link History, menu, settings window, Keychain, Launch at Login
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
 CONTEXT.md         Glossary: Drop, Media File, Upload, Share Link, …
@@ -235,6 +243,8 @@ docs/adr/          Architecture decisions and what's deliberately out of scope
   - 0002: Cloudinary URL in the Keychain
   - 0003: direct signed uploads
   - 0004: what's out of scope
+  - 0005: short Share Links
+  - 0006: recent links fetched from Cloudinary
 
   Read these before adding features.
 
@@ -256,7 +266,13 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
-- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL.
+- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL and the full date.
+- [ ] Right after launch, the first click shows the account's recent links, including ones older than this launch, with `Yesterday`/weekday/date labels.
+- [ ] A file uploaded on the **other Mac** appears here the next time the menu is opened (after at most 30 seconds), with a thumbnail if it's an image.
+- [ ] Your own new upload appears at the top immediately and doesn't disappear and reappear a few seconds later.
+- [ ] With the menu open while a refresh finishes, the rows update in place without jumping more than needed, and the highlight stays on the same entry.
+- [ ] With Wi-Fi off, opening the menu keeps the old list and shows "Couldn't refresh Link History", with the reason on hover. Turning Wi-Fi back on clears it at the next refresh.
+- [ ] Saving a key that can upload but not list shows the warning and keeps the window open.
 - [ ] Each image row has a rounded square thumbnail, and each video row a film icon.
 - [ ] Hovering a row or moving with the arrow keys highlights it. Return copies the highlighted row.
 - [ ] Clicking a row or its Copy button copies without opening, closes the menu and flashes ✓. The Open button opens the link and closes the menu.

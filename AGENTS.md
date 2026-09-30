@@ -24,8 +24,9 @@ The ADRs:
 - **0003:** signed uploads go straight to Cloudinary, with no server. The Free-plan Size Limits are enforced on the Mac.
 - **0004:** the explicit list of things that are out of scope.
 - **0005:** short Share Links: random `d/<8 chars>` names, links built from the public_id (root path for images, no version), and uploads that never overwrite.
+- **0006:** the Link History is fetched from Cloudinary's Search API, so both Macs show the same list; Cloudinary-made image thumbnails are the one transformation outside HEIC→JPG.
 
-`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0005-…`) and keep it to a paragraph or two.
+`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0007-…`) and keep it to a paragraph or two.
 
 ## Environment facts
 
@@ -64,7 +65,8 @@ Sources/
     PublicID.swift                public_id = d/<8 random a-z0-9>; the URL folder vs the console folder
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
     ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle
-    Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file)
+    Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
+    HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads; HistoryTime labels
     TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
@@ -72,8 +74,9 @@ Sources/
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
     HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename · time, Copy and Open buttons
-    UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Link History, Last Error, logging
-    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save
+    UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Last Error, logging
+    LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, thumbnail cache
+    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search
     KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL
     LoginItem.swift               SMAppService.mainApp; registers once on first launch (on by default)
 Tests/CloudDropCoreTests/         Swift Testing (`import Testing`, @Suite/@Test/#expect) for CloudDropCore only
@@ -96,11 +99,19 @@ Makefile                          Build, bundle, sign, install, and the test wra
    - `ShareLink.make` builds the Share Link
    - it's copied to the clipboard and opened with `NSWorkspace.shared.open`
    - for an image, a thumbnail is made (off the main actor) while the file is still on disk
-   - it's added to the front of the Link History, which is capped at 10
+   - it's handed to `LinkHistory.add` as an unconfirmed entry, sorted by Cloudinary's `created_at` from the upload response
    - the ✓ flash is shown
 
    A failure sets the Last Error and flashes ✗, and the queue **continues** with the next file.
 6. `StatusController.render()` picks the icon: flash (✓/✗, 2 s) > uploading (`arrow.up.circle` + ` NN%`) > idle (`icloud.and.arrow.up`).
+
+### How the Link History refreshes
+
+1. `LinkHistory.refresh()` runs at launch and from `menuNeedsUpdate`. It skips if a fetch is running, the last one started under 30 s ago, or a rate limit pause hasn't ended.
+2. The menu is built at once from what's already known. When the fetch returns, an **open** menu is rebuilt only if its Link History section changed (public_ids, the problem line, loading/empty); a thumbnail arriving just updates its row. The highlight is restored by Share Link.
+3. A successful fetch replaces the fetched list. `HistorySearch.stillUnconfirmed` keeps this Mac's own Uploads that search doesn't list yet, for up to 2 minutes after the Upload.
+4. Image rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), cached in memory by public_id and pruned to what's shown.
+5. Saving new credentials calls `LinkHistory.reset()`, which clears everything and refetches.
 
 ## Invariants: don't break these
 
@@ -119,14 +130,19 @@ These are decisions the user made during design. Changing any of them needs thei
   - videos: `https://res.cloudinary.com/<cloud>/video/upload/d/<name>.<format>`, because the root path form 404s for videos
   - there's never a version segment
   - `.heic`/`.heif` become `.jpg`
-  - Don't add `f_auto`, `q_auto` or other transformations.
+  - Don't add `f_auto`, `q_auto` or other transformations. The Link History's thumbnail URLs are the only other transformation, and they're never a Share Link ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)).
 - **Uploads never overwrite.** They're sent with `overwrite=false`. On a taken name, Cloudinary answers **200** describing the *old* file with `"existing": true`, and `Uploader.uploadedFile` turns that into `UploadError.nameTaken`. Without this check, the new Upload would get the old file's link. Leaving the version out is only safe because of this: a default overwrite serves the new bytes even at the old versioned URL.
 
 **Menu**
 - **The Last Error clears when the next Drop begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
-- **Link History is in memory only**, newest first, max 10, thumbnails included; nothing is written to disk.
-- **Each entry is a `HistoryRowView`** in a fixed 360 pt menu: one 30 pt line of `[thumbnail] filename · HH:mm [Copy] [Open]`, with the Share Link as the tooltip.
-  - Images get a 22 pt square thumbnail with 4 pt rounded corners. Videos get the `film` symbol, never a preview, and undecodable images get `photo`.
+- **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 10 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
+  - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
+  - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
+  - A failed refresh keeps the old list and adds a disabled "Couldn't refresh Link History" line with the reason as its tooltip. A rate limit (HTTP 420/429) shows "Link History paused until HH:mm" and stops refreshes until `X-FeatureRateLimit-Reset`. Neither touches the Last Error.
+- **Each entry is a `HistoryRowView`** in a fixed 360 pt menu: one 30 pt line of `[thumbnail] filename · time [Copy] [Open]`, with the Share Link and the full date and time as the tooltip.
+  - The filename is `display_name`, or the public_id's last part when that's empty.
+  - The time is `HistoryTime.label`: `HH:mm` today, `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
+  - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
   - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
   - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every action closes the menu, and a copy flashes ✓.
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
@@ -136,7 +152,7 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Setup**
 - **Launch at Login** is registered once on first launch, tracked by the `didApplyDefaultLoginItem` UserDefaults flag, and toggled from the menu.
-- **Credentials** are read lazily from the Keychain on first use and cached in `StatusController`. The settings window updates the cache when it saves.
+- **Credentials** are read from the Keychain once, at launch for the first Link History fetch, and cached in `StatusController`. After a rebuild the Keychain prompt therefore appears as soon as the new build starts. The settings window updates the cache when it saves.
 
 ## The Cloudinary API: what matters
 
@@ -171,6 +187,17 @@ These are decisions the user made during design. Changing any of them needs thei
 
    This step exists because the user once pasted a restricted key: it passed the ping, then every upload failed with `403 … missing permissions (actions=["create"])`.
 
+After `verify` passes and the key is saved, the settings window runs one search with `max_results=1`. Only a 403 counts: the key stays saved, and the window stays open with a warning that the Link History will only show this Mac's Uploads. A network error or rate limit says nothing about the key and is ignored.
+
+**Link History search**
+- `POST /v1_1/<cloud>/resources/search` with Basic auth and a JSON body: `expression=asset_folder=clouddrop`, `sort_by created_at desc`, `max_results=10`, and `fields` for `public_id`, `format`, `resource_type`, `created_at` and `display_name`.
+- It returns images and videos in one call. Anything else is skipped.
+- **Filter on the asset folder.** The account holds hundreds of assets from another tool in the root folder.
+- The folder has two public_id shapes: `d/xxxxxxxx`, and the older `clouddrop/YYMMDD_HHMMSS_…`. Share Links built from either resolve.
+- **Rate limit:** the Admin API, Search included, allows 500 calls an hour on the Free plan. That's shared by both Macs and every tool using the key. It's reported in `X-FeatureRateLimit-Limit/-Remaining/-Reset`, and exceeding it answers 420 (or 429).
+- **Search is eventually consistent:** a new asset can take a few seconds to show up. That's why `LinkHistory` keeps unconfirmed entries.
+- Each thumbnail costs one transformation per image, once; repeat requests are free.
+
 **Errors**
 - `UploadError.cloudinary(message)` carries Cloudinary's `error.message`, plus `(HTTP n)`.
 - A 403 becomes `UploadError.notAllowedToUpload(cloudinaryMessage:)`. The menu shows the readable "isn't allowed to upload" message, and its `description` (what the log prints) adds Cloudinary's own message.
@@ -199,7 +226,7 @@ These are decisions the user made during design. Changing any of them needs thei
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails, Share Link shapes (image, video, HEIC), and menu truncation.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads) and its time labels.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
@@ -210,7 +237,7 @@ These are decisions the user made during design. Changing any of them needs thei
   ```sh
   swiftc -O Sources/CloudDropCore/*.swift harness/main.swift -o harness/e2e
   ```
-  Here `main.swift` calls `Uploader` directly and reads credentials from an environment variable.
+  Here `main.swift` calls `Uploader` or `HistorySearch` directly and reads credentials from an environment variable. Use top-level code, not `-parse-as-library`.
 - To get credentials without printing them, extract `CLOUDINARY_URL` from `~/.zshrc` with `grep` into a shell variable. Never `echo` it, and never read the app's Keychain item: that would prompt the user.
 - Upload only tiny generated files. **Delete every test asset afterwards** with the Admin API, `DELETE /v1_1/<cloud>/resources/<type>/upload?public_ids[]=…`.
 - To test failure paths without touching the account, use fake credentials such as `cloudinary://1:2@nonexistent-cloud`.
@@ -232,7 +259,7 @@ The app's Last Error text is only in memory. **Ask the user to read the ⚠︎ l
 
 - **⌘V in the settings field needs `NSApp.mainMenu`.** A menu-bar-only (`LSUIElement`) app has no visible menu bar, but without an Edit menu, key equivalents like ⌘V don't reach the text field. `AppDelegate.makeMainMenu()` provides a hidden one. Keep it.
 - **Activating windows:** call `NSApp.activate()` before showing the settings window, or it opens behind other apps.
-- **The Keychain prompt** only appears after a rebuild, not on first save, because the app that created the item is trusted automatically.
+- **The Keychain prompt** only appears after a rebuild, not on first save, because the app that created the item is trusted automatically. The Link History's fetch at launch reads the Keychain, so after `make install` the prompt appears right away.
 - **Browser drags** aren't officially supported (ADR 0004). If a browser offers a file promise, it may still upload. This is known and accepted; don't add special handling unless the user asks.
 - **The notch:** on the MacBook Pro, menu bar items that don't fit are hidden behind the notch. This is an accepted risk; there's no fallback trigger by design.
 - **SMAppService** works best when the app lives in `/Applications`, which is why `make install` copies it there.
@@ -241,9 +268,9 @@ The app's Last Error text is only in memory. **Ask the user to read the ⚠︎ l
 
 Don't add any of these unless the user explicitly asks, and then revisit ADR 0004:
 - deleting or renaming uploads
-- Cloudinary transformations (beyond HEIC → JPG)
+- Cloudinary transformations (beyond HEIC → JPG and the Link History's thumbnails)
 - other cloud services
-- persistent Link History
+- Link History written to disk
 - clipboard images, browser-drag support, non-media files
 - auto-update
 - a Dock icon

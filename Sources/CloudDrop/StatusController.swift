@@ -9,16 +9,25 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let queue = UploadQueue()
+    private let history = LinkHistory()
     private let menu = NSMenu()
     private let promiseQueue = OperationQueue()
     private lazy var settings = SettingsWindowController { [weak self] saved in
         self?.cachedCredentials = saved
+        self?.history.reset()
     }
 
     private var cachedCredentials: CloudinaryCredentials?
     private var didLoadCredentials = false
     private var flash: Flash?
     private var flashToken = 0
+
+    private var isMenuOpen = false
+    /// What the open menu's Link History section shows, to tell a real change from a thumbnail arriving.
+    private var shownHistory: [String] = []
+    private var rowViews: [String: HistoryRowView] = [:]
+    /// Survives a rebuild of the open menu, so the highlight stays on the same entry.
+    private var highlightedLink: URL?
 
     override init() {
         super.init()
@@ -33,12 +42,18 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
         queue.credentials = { [weak self] in self?.credentials() }
         queue.onEvent = { [weak self] event in self?.handle(event) }
+        queue.onUploaded = { [weak self] entry, thumbnail in self?.history.add(entry, thumbnail: thumbnail) }
+        history.credentials = { [weak self] in self?.credentials() }
+        history.onChange = { [weak self] in self?.historyChanged() }
         render()
+        // So the first click already shows the Link History.
+        history.refresh()
     }
 
     // MARK: Credentials
 
-    /// Read lazily so the Keychain prompt after a rebuild appears on first use, not at login.
+    /// Read once and cached. The first read happens at launch, for the Link History, so after a rebuild
+    /// the Keychain prompt appears when the new build starts.
     private func credentials() -> CloudinaryCredentials? {
         if !didLoadCredentials {
             cachedCredentials = KeychainStore.load()
@@ -168,7 +183,53 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     // MARK: Menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Shows what's already known now; a fresh list replaces it in place when it arrives.
+        history.refresh()
+        buildMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        isMenuOpen = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
+        highlightedLink = nil
+    }
+
+    /// A refresh or a thumbnail finished. An open menu is only rebuilt when its Link History section changed,
+    /// so rows don't shift under the pointer for nothing.
+    private func historyChanged() {
+        guard isMenuOpen else { return }
+        guard historySection() == shownHistory else {
+            buildMenu()
+            for item in menu.items {
+                (item.view as? HistoryRowView)?.isHighlighted = item.representedObject as? URL == highlightedLink
+            }
+            return
+        }
+        for entry in history.entries {
+            if let image = history.thumbnail(for: entry) { rowViews[entry.publicID]?.setThumbnail(image) }
+        }
+    }
+
+    private func historySection() -> [String] {
+        var section = history.entries.map(\.publicID)
+        switch history.currentProblem {
+        case let .failed(reason)?: section.append("failed: \(reason)")
+        case let .paused(until)?: section.append("paused: \(until)")
+        case nil: break
+        }
+        if history.entries.isEmpty { section.append(isLoading ? "loading" : "empty") }
+        return section
+    }
+
+    private var isLoading: Bool { !history.hasLoaded && history.isFetching }
+
+    private func buildMenu() {
         menu.removeAllItems()
+        rowViews = [:]
+        shownHistory = historySection()
 
         if let error = queue.lastError {
             let item = NSMenuItem(title: "⚠︎ " + MenuText.truncateMiddle(error, maxLength: 60), action: nil, keyEquivalent: "")
@@ -178,31 +239,49 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             menu.addItem(.separator())
         }
 
-        if queue.history.isEmpty {
-            let empty = NSMenuItem(title: "No uploads yet", action: nil, keyEquivalent: "")
+        if history.entries.isEmpty {
+            let empty = NSMenuItem(title: isLoading ? "Loading…" : "No uploads yet", action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            let time = DateFormatter()
-            time.dateFormat = "HH:mm"
-            for (index, entry) in queue.history.enumerated() {
+            for entry in history.entries {
                 // The action is what Return sends for a highlighted row; clicks go through the view.
                 let item = NSMenuItem(title: entry.filename, action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
                 item.target = self
-                item.tag = index
-                item.view = HistoryRowView(
+                item.representedObject = entry.shareLink
+                let row = HistoryRowView(
                     entry: entry,
-                    time: time.string(from: entry.uploadedAt),
+                    thumbnail: history.thumbnail(for: entry),
+                    time: HistoryTime.label(for: entry.uploadedAt),
+                    fullTime: HistoryTime.full(entry.uploadedAt),
                     onCopy: { [weak self] in
                         self?.menu.cancelTracking()
-                        self?.queue.recopy(entry)
+                        self?.queue.recopy(entry.shareLink)
                     },
                     onOpen: { [weak self] in
                         self?.menu.cancelTracking()
-                        NSWorkspace.shared.open(entry.link)
+                        NSWorkspace.shared.open(entry.shareLink)
                     })
+                item.view = row
+                rowViews[entry.publicID] = row
                 menu.addItem(item)
             }
+        }
+
+        if let problem = history.currentProblem {
+            let item: NSMenuItem
+            switch problem {
+            case let .failed(reason):
+                item = NSMenuItem(title: "Couldn't refresh Link History", action: nil, keyEquivalent: "")
+                item.toolTip = reason
+            case let .paused(until):
+                let time = DateFormatter()
+                time.dateFormat = "HH:mm"
+                item = NSMenuItem(title: "Link History paused until \(time.string(from: until))", action: nil, keyEquivalent: "")
+                item.toolTip = HistoryFetchError.rateLimited(until: until).localizedDescription
+            }
+            item.isEnabled = false
+            menu.addItem(item)
         }
         menu.addItem(.separator())
 
@@ -220,14 +299,15 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        highlightedLink = item?.representedObject as? URL
         for menuItem in menu.items {
             (menuItem.view as? HistoryRowView)?.isHighlighted = menuItem === item
         }
     }
 
     @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
-        guard queue.history.indices.contains(sender.tag) else { return }
-        queue.recopy(queue.history[sender.tag])
+        guard let link = sender.representedObject as? URL else { return }
+        queue.recopy(link)
     }
 
     @objc private func openSettings() {

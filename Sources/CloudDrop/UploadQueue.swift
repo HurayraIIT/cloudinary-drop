@@ -6,16 +6,6 @@ import UniformTypeIdentifiers
 /// Watch with: log stream --predicate 'subsystem == "com.hurayraiit.clouddrop"'
 let log = Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")
 
-/// One entry in the Link History.
-struct HistoryEntry {
-    let filename: String
-    let kind: MediaKind
-    let uploadedAt: Date
-    let link: URL
-    /// Images only; videos show an icon instead.
-    let thumbnail: NSImage?
-}
-
 /// The Upload Queue: Media Files are uploaded one at a time, in the order they were dropped.
 @MainActor
 final class UploadQueue {
@@ -29,15 +19,14 @@ final class UploadQueue {
         let isTemporary: Bool
     }
 
-    static let historyLimit = 10
-
-    private(set) var history: [HistoryEntry] = []
     private(set) var lastError: String?
     /// Progress of the current Upload, or nil when the queue is idle.
     private(set) var progress: Double?
 
     var onEvent: (Event) -> Void = { _ in }
     var credentials: () -> CloudinaryCredentials? = { nil }
+    /// Each successful Upload, with its thumbnail for images, for the Link History.
+    var onUploaded: (HistoryEntry, NSImage?) -> Void = { _, _ in }
 
     private var pending: [Job] = []
     private var isRunning = false
@@ -79,9 +68,9 @@ final class UploadQueue {
         }
     }
 
-    /// Copies a Link History entry again. The ✓ flash is the only sign it worked, as the menu has closed.
-    func recopy(_ entry: HistoryEntry) {
-        copyToClipboard(entry.link)
+    /// Copies a Link History entry's Share Link again. The ✓ flash is the only sign it worked, as the menu has closed.
+    func recopy(_ link: URL) {
+        copyToClipboard(link)
         onEvent(.succeeded)
     }
 
@@ -128,8 +117,8 @@ final class UploadQueue {
             copyToClipboard(link)
             NSWorkspace.shared.open(link)
             let thumbnail = job.kind == .image ? await Self.thumbnail(of: job.fileURL) : nil
-            history.insert(HistoryEntry(filename: job.filename, kind: job.kind, uploadedAt: Date(), link: link, thumbnail: thumbnail), at: 0)
-            history = Array(history.prefix(Self.historyLimit))
+            onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: job.filename,
+                                    uploadedAt: file.createdAt ?? Date(), shareLink: link), thumbnail)
             progress = nil
             onEvent(.succeeded)
         } catch {

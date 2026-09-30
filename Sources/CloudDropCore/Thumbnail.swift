@@ -26,4 +26,16 @@ public enum Thumbnail {
         let crop = min(scaled.width, scaled.height)
         return scaled.cropping(to: CGRect(x: (scaled.width - crop) / 2, y: (scaled.height - crop) / 2, width: crop, height: crop))
     }
+
+    /// Where Cloudinary serves a `side`-pixel square, centre-cropped JPEG of an image Upload. The Link History
+    /// uses it for Uploads from the other Mac; Share Links never carry a transformation (ADR 0006).
+    public static func url(cloudName: String, publicID: String, side: Int) -> URL {
+        URL(string: "https://res.cloudinary.com/\(cloudName)/image/upload/c_fill,w_\(side),h_\(side)/\(publicID).jpg")!
+    }
+
+    /// Decodes a downloaded thumbnail. Nil when the data isn't an image.
+    public static func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
 }
