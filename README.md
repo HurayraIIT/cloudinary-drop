@@ -4,7 +4,7 @@ A tiny macOS menu bar app: **drop an image or video on the cloud icon and get a 
 
 It's built for one person, one Cloudinary account and two Macs. It isn't distributed or notarized, and it will never be on the App Store.
 
-- Native Swift + AppKit, about 380 KB installed, about 12 MB of memory when idle ([resource use](#resource-use))
+- Native Swift + AppKit, about 540 KB installed, about 16 MB of memory when idle ([resource use](#resource-use))
 - No Dock icon, no windows except a one-time settings field
 - Uploads go straight from your Mac to Cloudinary, with no server in between
 
@@ -194,15 +194,16 @@ This logs every upload, refusal and failure, including Cloudinary's error messag
 
 ## Resource use
 
-Measured on an M4 MacBook Pro running macOS 26.6 (2026-09-28):
+Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30):
 
 | | |
 |---|---|
-| App size | 384 KB (a 381 KB binary; the Swift runtime ships with macOS) |
-| Memory, idle | about 12 MB after launch, about 19 MB after opening the menu and settings window |
-| CPU, idle | 0.0%, with about 3 threads and no timers or polling |
+| App size | 544 KB (a 546 KB binary; the Swift runtime ships with macOS) |
+| Memory, idle | about 16 MB after launch, including the first Link History fetch; about 30 MB after some use (opening the menu with its thumbnails, an upload) |
+| CPU, idle | 0.0%, with about 5 threads and no timers or polling; about 0.03 s of CPU a minute and 10–16 idle wakeups a minute |
 | Energy, idle | 0.0 in `top`'s power column, so it doesn't keep the Mac awake |
-| Upload of a 75 MB video | about 1 second of CPU in total, peak memory about 17 MB |
+| Network, idle | none. One search when it launches, then at most one every 30 seconds, and only when you open the menu. Each thumbnail is about 1 KB |
+| Upload of a 75 MB video | about 1 second of CPU in total, peak memory about 17 MB (measured 2026-09-28) |
 
 The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file size. Upload time depends on your connection: 75 MB took about 70 seconds over Wi-Fi.
 
