@@ -22,4 +22,14 @@ public enum MenuText {
         let head = (keep + 1) / 2
         return String(text.prefix(head)) + "…" + String(text.suffix(keep - head))
     }
+
+    /// The size next to each Link History entry, in the same binary units as the Size Limit messages:
+    /// `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`.
+    public static func fileSize(_ bytes: Int64) -> String {
+        let kilobytes = (Double(bytes) / 1024).rounded()
+        if kilobytes < 1024 { return "\(bytes > 0 ? max(1, Int(kilobytes)) : 0) KB" }
+        let megabytes = Double(bytes) / 1_048_576
+        let tenths = (megabytes * 10).rounded() / 10
+        return tenths < 10 ? String(format: "%.1f MB", tenths) : "\(Int(megabytes.rounded())) MB"
+    }
 }

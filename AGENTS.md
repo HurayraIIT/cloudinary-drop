@@ -64,7 +64,7 @@ Sources/
     CloudinaryCredentials.swift   Parses a Cloudinary URL (tolerates `export CLOUDINARY_URL="…"`, quotes, whitespace, ?query)
     PublicID.swift                public_id = d/<8 random a-z0-9>; the URL folder vs the console folder
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
-    ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle
+    ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle and fileSize
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
     HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads; HistoryTime labels
     TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
@@ -73,7 +73,7 @@ Sources/
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
-    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename · time, Copy and Open buttons
+    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy and Open buttons
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Last Error, logging
     LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, thumbnail cache
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search
@@ -139,9 +139,11 @@ These are decisions the user made during design. Changing any of them needs thei
   - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
   - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
   - A failed refresh keeps the old list and adds a disabled "Couldn't refresh Link History" line with the reason as its tooltip. A rate limit (HTTP 420/429) shows "Link History paused until HH:mm" and stops refreshes until `X-FeatureRateLimit-Reset`. Neither touches the Last Error.
-- **Each entry is a `HistoryRowView`** in a fixed 360 pt menu: one 30 pt line of `[thumbnail] filename · time [Copy] [Open]`, with the Share Link and the full date and time as the tooltip.
+- **Each entry is a `HistoryRowView`** in a fixed 420 pt menu: one 30 pt line of `[thumbnail] filename … size time [Copy] [Open]`, with the Share Link, the full date and time, and the size as the tooltip.
   - The filename is `display_name`, or the public_id's last part when that's empty.
   - The time is `HistoryTime.label`: `HH:mm` today, `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
+  - The size is Cloudinary's `bytes`: the Media File as dropped, so a HEIC shows the HEIC's size, not the JPEG its Share Link delivers. This Mac's unconfirmed Uploads take it from the upload response. `MenuText.fileSize` uses the Size Limit messages' binary units: `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`. An unknown size leaves the cell blank, never `0 KB`.
+  - The size and time are right-aligned columns in grey monospaced digits. Each is as wide as its widest label in the menu, so every row lines up; there's no `·` separator.
   - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
   - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
   - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every action closes the menu, and a copy flashes ✓.
@@ -190,7 +192,7 @@ These are decisions the user made during design. Changing any of them needs thei
 After `verify` passes and the key is saved, the settings window runs one search with `max_results=1`. Only a 403 counts: the key stays saved, and the window stays open with a warning that the Link History will only show this Mac's Uploads. A network error or rate limit says nothing about the key and is ignored.
 
 **Link History search**
-- `POST /v1_1/<cloud>/resources/search` with Basic auth and a JSON body: `expression=asset_folder=clouddrop`, `sort_by created_at desc`, `max_results=10`, and `fields` for `public_id`, `format`, `resource_type`, `created_at` and `display_name`.
+- `POST /v1_1/<cloud>/resources/search` with Basic auth and a JSON body: `expression=asset_folder=clouddrop`, `sort_by created_at desc`, `max_results=10`, and `fields` for `public_id`, `format`, `resource_type`, `created_at`, `display_name` and `bytes`.
 - It returns images and videos in one call. Anything else is skipped.
 - **Filter on the asset folder.** The account holds hundreds of assets from another tool in the root folder.
 - The folder has two public_id shapes: `d/xxxxxxxx`, and the older `clouddrop/YYMMDD_HHMMSS_…`. Share Links built from either resolve.
@@ -226,7 +228,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads) and its time labels.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads) and its time labels.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.

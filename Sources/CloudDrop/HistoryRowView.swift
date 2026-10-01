@@ -1,12 +1,25 @@
 import AppKit
 import CloudDropCore
 
-/// One Link History entry in the menu: thumbnail, filename · time, and Copy / Open buttons.
+/// One Link History entry in the menu: thumbnail, filename, size and time columns, and Copy / Open buttons.
 /// A view in a menu item draws its own highlight; `StatusController` sets `isHighlighted`
 /// from `menu(_:willHighlight:)` so hover and arrow keys look like a normal menu item.
 @MainActor
 final class HistoryRowView: NSView {
     static let thumbnailSide: CGFloat = 22
+    static let width: CGFloat = 420
+    /// Monospaced digits so times and sizes line up from row to row.
+    static let columnFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular)
+
+    /// The width of a column: its widest label among the rows in the menu, so every row lines up.
+    static func columnWidth(_ labels: [String]) -> CGFloat {
+        let field = NSTextField(labelWithString: "")
+        field.font = columnFont
+        return labels.map { label in
+            field.stringValue = label
+            return label.isEmpty ? 0 : field.intrinsicContentSize.width.rounded(.up)
+        }.max() ?? 0
+    }
 
     var isHighlighted = false {
         didSet {
@@ -19,22 +32,26 @@ final class HistoryRowView: NSView {
     private let thumbnail = NSImageView()
     private var isPlaceholder = true
     private let title: NSTextField
+    private let size: NSTextField
     private let time: NSTextField
     private let copyButton: RowButton
     private let openButton: RowButton
     private let onCopy: () -> Void
 
-    init(entry: HistoryEntry, thumbnail image: NSImage?, time timeText: String, fullTime: String,
-         onCopy: @escaping () -> Void, onOpen: @escaping () -> Void) {
+    /// `sizeText` is empty when Cloudinary didn't report a size; the cell stays blank rather than claim one.
+    init(entry: HistoryEntry, thumbnail image: NSImage?, size sizeText: String, time timeText: String, fullTime: String,
+         sizeWidth: CGFloat, timeWidth: CGFloat, onCopy: @escaping () -> Void, onOpen: @escaping () -> Void) {
         self.onCopy = onCopy
         title = NSTextField(labelWithString: entry.filename)
-        time = NSTextField(labelWithString: "· \(timeText)")
+        size = NSTextField(labelWithString: sizeText)
+        time = NSTextField(labelWithString: timeText)
         copyButton = RowButton(symbol: "doc.on.doc", label: "Copy Link", action: onCopy)
         openButton = RowButton(symbol: "arrow.up.right.square", label: "Open in Browser", action: onOpen)
-        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 30))
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: 30))
         autoresizingMask = .width
-        toolTip = "\(entry.shareLink.absoluteString)\n\(fullTime)"
-        setAccessibilityLabel("\(entry.filename), \(timeText)")
+        let details = sizeText.isEmpty ? fullTime : "\(fullTime) · \(sizeText)"
+        toolTip = "\(entry.shareLink.absoluteString)\n\(details)"
+        setAccessibilityLabel([entry.filename, sizeText, timeText].filter { !$0.isEmpty }.joined(separator: ", "))
 
         if let image {
             setThumbnail(image)
@@ -43,15 +60,16 @@ final class HistoryRowView: NSView {
             thumbnail.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
         }
 
-        let font = NSFont.menuFont(ofSize: 0)
-        title.font = font
+        title.font = NSFont.menuFont(ofSize: 0)
         title.lineBreakMode = .byTruncatingMiddle
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        time.font = font
-        time.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for column in [size, time] {
+            column.font = Self.columnFont
+            column.alignment = .right
+        }
 
-        for view in [thumbnail, title, time, copyButton, openButton] as [NSView] {
+        for view in [thumbnail, title, size, time, copyButton, openButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -62,9 +80,13 @@ final class HistoryRowView: NSView {
             thumbnail.heightAnchor.constraint(equalToConstant: Self.thumbnailSide),
             title.leadingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: 8),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            time.leadingAnchor.constraint(equalTo: title.trailingAnchor, constant: 4),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: size.leadingAnchor, constant: -10),
+            size.widthAnchor.constraint(equalToConstant: sizeWidth),
+            size.trailingAnchor.constraint(equalTo: time.leadingAnchor, constant: sizeWidth > 0 ? -10 : 0),
+            size.centerYAnchor.constraint(equalTo: centerYAnchor),
+            time.widthAnchor.constraint(equalToConstant: timeWidth),
+            time.trailingAnchor.constraint(equalTo: copyButton.leadingAnchor, constant: -10),
             time.centerYAnchor.constraint(equalTo: centerYAnchor),
-            time.trailingAnchor.constraint(lessThanOrEqualTo: copyButton.leadingAnchor, constant: -10),
             copyButton.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -4),
             copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             openButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
@@ -102,7 +124,9 @@ final class HistoryRowView: NSView {
 
     private func updateColors() {
         title.textColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
-        time.textColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
+        for column in [size, time] {
+            column.textColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
+        }
         if isPlaceholder {
             thumbnail.contentTintColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
         }

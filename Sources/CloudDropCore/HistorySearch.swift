@@ -10,13 +10,16 @@ public struct HistoryEntry: Equatable, Sendable {
     /// By Cloudinary's clock, so entries from both Macs sort together.
     public let uploadedAt: Date
     public let shareLink: URL
+    /// Cloudinary's `bytes`, the size of the Media File as dropped. Nil when Cloudinary didn't say.
+    public let byteCount: Int64?
 
-    public init(publicID: String, kind: MediaKind, filename: String, uploadedAt: Date, shareLink: URL) {
+    public init(publicID: String, kind: MediaKind, filename: String, uploadedAt: Date, shareLink: URL, byteCount: Int64? = nil) {
         self.publicID = publicID
         self.kind = kind
         self.filename = filename
         self.uploadedAt = uploadedAt
         self.shareLink = shareLink
+        self.byteCount = byteCount
     }
 }
 
@@ -100,7 +103,7 @@ public struct HistorySearch: Sendable {
             "expression": "asset_folder=\(PublicID.assetFolder)",
             "sort_by": [["created_at": "desc"]],
             "max_results": limit,
-            "fields": ["public_id", "format", "resource_type", "created_at", "display_name"],
+            "fields": ["public_id", "format", "resource_type", "created_at", "display_name", "bytes"],
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
         return request
@@ -137,7 +140,8 @@ public struct HistorySearch: Sendable {
             kind: kind,
             filename: displayName.isEmpty ? String(publicID.split(separator: "/").last ?? "") : displayName,
             uploadedAt: createdAt,
-            shareLink: ShareLink.make(cloudName: cloudName, kind: kind, file: UploadedFile(publicID: publicID, format: format)))
+            shareLink: ShareLink.make(cloudName: cloudName, kind: kind, file: UploadedFile(publicID: publicID, format: format)),
+            byteCount: (resource["bytes"] as? NSNumber)?.int64Value)
     }
 
     /// Parses `Wed, 30 Sep 2026 07:00:00 GMT`.

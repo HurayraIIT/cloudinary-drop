@@ -91,7 +91,7 @@ Click the icon to see:
 | Item | What it does |
 |---|---|
 | ⚠︎ *error* | The last problem from your most recent Drop. Hover for the full text. It clears when you drop something new |
-| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), `filename · time` (`14:02` today, then `Yesterday`, `Mon`, `12 Sep`), and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL and the full date. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
+| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`14:02` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until HH:mm | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
@@ -267,7 +267,8 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
-- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL and the full date.
+- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, the full date and the size.
+- [ ] Sizes and times line up in two right-aligned grey columns on every row, including a mix of `Yesterday` and `HH:mm`. A screenshot name like `SCR-20261001-kywz.png` fits without shortening.
 - [ ] Right after launch, the first click shows the account's recent links, including ones older than this launch, with `Yesterday`/weekday/date labels.
 - [ ] A file uploaded on the **other Mac** appears here the next time the menu is opened (after at most 30 seconds), with a thumbnail if it's an image.
 - [ ] Your own new upload appears at the top immediately and doesn't disappear and reappear a few seconds later.

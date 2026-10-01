@@ -118,7 +118,7 @@ final class UploadQueue {
             NSWorkspace.shared.open(link)
             let thumbnail = job.kind == .image ? await Self.thumbnail(of: job.fileURL) : nil
             onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: job.filename,
-                                    uploadedAt: file.createdAt ?? Date(), shareLink: link), thumbnail)
+                                    uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount), thumbnail)
             progress = nil
             onEvent(.succeeded)
         } catch {

@@ -35,11 +35,14 @@ public struct UploadedFile: Equatable, Sendable {
     public let format: String
     /// When Cloudinary stored it, by Cloudinary's clock. The Link History is sorted by this.
     public let createdAt: Date?
+    /// The stored size: the Media File as dropped, even for a HEIC whose Share Link delivers a JPEG.
+    public let byteCount: Int64?
 
-    public init(publicID: String, format: String, createdAt: Date? = nil) {
+    public init(publicID: String, format: String, createdAt: Date? = nil, byteCount: Int64? = nil) {
         self.publicID = publicID
         self.format = format
         self.createdAt = createdAt
+        self.byteCount = byteCount
     }
 }
 
@@ -116,7 +119,8 @@ public struct Uploader: Sendable {
         if status == 200, let publicID = json?["public_id"] as? String, let format = json?["format"] as? String {
             if json?["existing"] as? Bool == true { throw UploadError.nameTaken(publicID: publicID) }
             let createdAt = (json?["created_at"] as? String).flatMap { try? Date($0, strategy: .iso8601) }
-            return UploadedFile(publicID: publicID, format: format, createdAt: createdAt)
+            let byteCount = (json?["bytes"] as? NSNumber)?.int64Value
+            return UploadedFile(publicID: publicID, format: format, createdAt: createdAt, byteCount: byteCount)
         }
         let message = errorMessage(in: data)
         if status == 403 { throw UploadError.notAllowedToUpload(cloudinaryMessage: message) }

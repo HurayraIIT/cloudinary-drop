@@ -244,7 +244,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             empty.isEnabled = false
             menu.addItem(empty)
         } else {
-            for entry in history.entries {
+            let sizes = history.entries.map { $0.byteCount.map(MenuText.fileSize) ?? "" }
+            let times = history.entries.map { HistoryTime.label(for: $0.uploadedAt) }
+            let sizeWidth = HistoryRowView.columnWidth(sizes)
+            let timeWidth = HistoryRowView.columnWidth(times)
+            for (index, entry) in history.entries.enumerated() {
                 // The action is what Return sends for a highlighted row; clicks go through the view.
                 let item = NSMenuItem(title: entry.filename, action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
                 item.target = self
@@ -252,8 +256,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
                 let row = HistoryRowView(
                     entry: entry,
                     thumbnail: history.thumbnail(for: entry),
-                    time: HistoryTime.label(for: entry.uploadedAt),
+                    size: sizes[index],
+                    time: times[index],
                     fullTime: HistoryTime.full(entry.uploadedAt),
+                    sizeWidth: sizeWidth,
+                    timeWidth: timeWidth,
                     onCopy: { [weak self] in
                         self?.menu.cancelTracking()
                         self?.queue.recopy(entry.shareLink)

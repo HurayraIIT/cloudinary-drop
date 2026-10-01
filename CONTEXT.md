@@ -33,7 +33,7 @@ _Avoid_: URL, public link, delivery URL
 ### What the menu shows
 
 **Link History**:
-The ten most recent Uploads in the account, from either Mac, newest first, each labelled by original filename and upload time. It is read from Cloudinary, so every Mac shows the same list. Choosing one copies its Share Link again without opening it.
+The ten most recent Uploads in the account, from either Mac, newest first, each labelled by original filename, the size of the Media File as dropped, and upload time. It is read from Cloudinary, so every Mac shows the same list. Choosing one copies its Share Link again without opening it.
 _Avoid_: Recents, log
 
 **Last Error**:

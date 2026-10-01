@@ -145,6 +145,12 @@ import UniformTypeIdentifiers
         #expect(file.createdAt == Date(timeIntervalSince1970: 1_790_750_686))
     }
 
+    @Test func keepsTheStoredSize() throws {
+        let file = try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"heic","bytes":2483017}"#))
+        #expect(file.byteCount == 2_483_017)
+        #expect(try Uploader.uploadedFile(status: 200, data: body(#"{"public_id":"d/k3f9x2ab","format":"png"}"#)).byteCount == nil)
+    }
+
     @Test func successWithoutPublicIDIsUnexpected() {
         #expect(throws: UploadError.unexpectedResponse(200)) {
             try Uploader.uploadedFile(status: 200, data: body(#"{"secure_url":"https://res.cloudinary.com/c/image/upload/v1/d/x.png"}"#))
@@ -258,6 +264,23 @@ import UniformTypeIdentifiers
         #expect(label.hasSuffix("14.15.03.png"))
         #expect(label.contains("…"))
     }
+
+    @Test(arguments: [
+        (Int64(0), "0 KB"),
+        (300, "1 KB"),
+        (870_400, "850 KB"),
+        (1_047_552, "1023 KB"),
+        (1_048_575, "1.0 MB"),
+        (4_404_019, "4.2 MB"),
+        (10_433_331, "9.9 MB"),
+        (10_433_332, "10 MB"),
+        (10_485_760, "10 MB"),
+        (91_226_112, "87 MB"),
+        (104_857_600, "100 MB"),
+    ])
+    func fileSizesUseTheSizeLimitsUnits(_ bytes: Int64, _ label: String) {
+        #expect(MenuText.fileSize(bytes) == label)
+    }
 }
 
 @Suite struct LinkHistorySearch {
@@ -282,12 +305,13 @@ import UniformTypeIdentifiers
         #expect(body["expression"] as? String == "asset_folder=clouddrop")
         #expect(body["sort_by"] as? [[String: String]] == [["created_at": "desc"]])
         #expect(body["max_results"] as? Int == 10)
+        #expect((body["fields"] as? [String])?.contains("bytes") == true)
     }
 
     @Test func readsImagesAndVideosIntoShareLinks() throws {
         let list = try entries(#"""
         {"total_count":3,"resources":[
-          {"public_id":"d/gqpnfwdn","format":"png","resource_type":"image","created_at":"2026-09-30T06:44:46Z","display_name":"SCR-20260930-llhf.png"},
+          {"public_id":"d/gqpnfwdn","format":"png","resource_type":"image","created_at":"2026-09-30T06:44:46Z","display_name":"SCR-20260930-llhf.png","bytes":431208},
           {"public_id":"d/l8vo1m5o","format":"mov","resource_type":"video","created_at":"2026-09-29T17:20:41Z","display_name":"Screen Recording.mov"},
           {"public_id":"clouddrop/260928_101500_ab12_shot","format":"heic","resource_type":"image","created_at":"2026-09-28T10:15:00Z","display_name":""}
         ]}
@@ -301,6 +325,8 @@ import UniformTypeIdentifiers
         #expect(list[0].uploadedAt == Date(timeIntervalSince1970: 1_790_750_686))
         #expect(list[0].filename == "SCR-20260930-llhf.png")
         #expect(list[2].filename == "260928_101500_ab12_shot", "an empty display_name falls back to the public_id's last part")
+        #expect(list[0].byteCount == 431_208)
+        #expect(list[1].byteCount == nil, "a missing size stays unknown, never zero")
     }
 
     @Test func skipsAnythingThatIsntAnImageOrVideo() throws {
