@@ -402,8 +402,10 @@ import UniformTypeIdentifiers
     }
 
     @Test func todayShowsTheTime() {
-        #expect(label(hoursAgo: 0.5) == "14:00")
-        #expect(label(hoursAgo: 14) == "00:30")
+        #expect(label(hoursAgo: 0.5) == "02:00 PM")
+        #expect(label(hoursAgo: 14) == "12:30 AM")
+        #expect(label(hoursAgo: 4.5) == "10:00 AM")
+        #expect(label(hoursAgo: 2.5) == "12:00 PM")
     }
 
     @Test func yesterday() {
@@ -421,7 +423,11 @@ import UniformTypeIdentifiers
     }
 
     @Test func tooltipShowsDateAndTime() {
-        #expect(HistoryTime.full(now, calendar: calendar) == "30 Sep 2026 at 14:30")
+        #expect(HistoryTime.full(now, calendar: calendar) == "30 Sep 2026 at 02:30 PM")
+    }
+
+    @Test func clockIsTwelveHour() {
+        #expect(HistoryTime.clock(now.addingTimeInterval(9 * 3600), calendar: calendar) == "11:30 PM")
     }
 }
 

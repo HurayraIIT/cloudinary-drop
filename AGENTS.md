@@ -138,10 +138,10 @@ These are decisions the user made during design. Changing any of them needs thei
 - **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 10 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
   - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
   - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
-  - A failed refresh keeps the old list and adds a disabled "Couldn't refresh Link History" line with the reason as its tooltip. A rate limit (HTTP 420/429) shows "Link History paused until HH:mm" and stops refreshes until `X-FeatureRateLimit-Reset`. Neither touches the Last Error.
+  - A failed refresh keeps the old list and adds a disabled "Couldn't refresh Link History" line with the reason as its tooltip. A rate limit (HTTP 420/429) shows "Link History paused until 03:00 PM" and stops refreshes until `X-FeatureRateLimit-Reset`. Neither touches the Last Error.
 - **Each entry is a `HistoryRowView`** in a fixed 420 pt menu: one 30 pt line of `[thumbnail] filename … size time [Copy] [Open]`, with the Share Link, the full date and time, and the size as the tooltip.
   - The filename is `display_name`, or the public_id's last part when that's empty.
-  - The time is `HistoryTime.label`: `HH:mm` today, `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
+  - The time is `HistoryTime.label`: the 12-hour `02:34 PM` today (`HistoryTime.clock`, also used by the tooltip and the paused line), `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
   - The size is Cloudinary's `bytes`: the Media File as dropped, so a HEIC shows the HEIC's size, not the JPEG its Share Link delivers. This Mac's unconfirmed Uploads take it from the upload response. `MenuText.fileSize` uses the Size Limit messages' binary units: `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`. An unknown size leaves the cell blank, never `0 KB`.
   - The size and time are right-aligned columns in grey monospaced digits. Each is as wide as its widest label in the menu, so every row lines up; there's no `·` separator.
   - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.

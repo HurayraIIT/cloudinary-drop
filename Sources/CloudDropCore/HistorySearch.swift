@@ -171,11 +171,11 @@ public struct HistorySearch: Sendable {
 
 /// The short time next to each Link History entry.
 public enum HistoryTime {
-    /// `14:02` today, `Yesterday`, `Mon` within the last week, then `12 Sep`, with the year once it's a past year.
+    /// `02:34 PM` today, `Yesterday`, `Mon` within the last week, then `12 Sep`, with the year once it's a past year.
     public static func label(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let format: String
         if calendar.isDate(date, inSameDayAs: now) {
-            format = "HH:mm"
+            format = clockFormat
         } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
             return "Yesterday"
         } else if let weekAgo = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)), date >= weekAgo, date < now {
@@ -190,8 +190,15 @@ public enum HistoryTime {
 
     /// The full date and time, for the tooltip.
     public static func full(_ date: Date, calendar: Calendar = .current) -> String {
-        string(date, format: "d MMM yyyy 'at' HH:mm", calendar: calendar)
+        string(date, format: "d MMM yyyy 'at' \(clockFormat)", calendar: calendar)
     }
+
+    /// The 12-hour time of day, `02:34 PM`, used everywhere the menu shows one.
+    public static func clock(_ date: Date, calendar: Calendar = .current) -> String {
+        string(date, format: clockFormat, calendar: calendar)
+    }
+
+    private static let clockFormat = "hh:mm a"
 
     private static func string(_ date: Date, format: String, calendar: Calendar) -> String {
         let formatter = DateFormatter()

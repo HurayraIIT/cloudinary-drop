@@ -282,9 +282,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
                 item = NSMenuItem(title: "Couldn't refresh Link History", action: nil, keyEquivalent: "")
                 item.toolTip = reason
             case let .paused(until):
-                let time = DateFormatter()
-                time.dateFormat = "HH:mm"
-                item = NSMenuItem(title: "Link History paused until \(time.string(from: until))", action: nil, keyEquivalent: "")
+                item = NSMenuItem(title: "Link History paused until \(HistoryTime.clock(until))", action: nil, keyEquivalent: "")
                 item.toolTip = HistoryFetchError.rateLimited(until: until).localizedDescription
             }
             item.isEnabled = false
