@@ -54,8 +54,8 @@ public enum HistoryFetchError: LocalizedError, CustomStringConvertible, Equatabl
 /// shows what either Mac uploaded (ADR 0006). Keep one per Cloudinary URL and `invalidate()` it when replaced.
 public struct HistorySearch: Sendable {
     public static let limit = 10
-    /// Search can take a few seconds to show a fresh Upload. A fetch that started this long after one of our own
-    /// Uploads and still doesn't list it means the file is gone, e.g. deleted in the console.
+    /// Search can take a few seconds to show a fresh Upload or drop a Deleted one. A fetch that started this long
+    /// after one of our own Uploads and still doesn't list it means the file is gone, e.g. deleted in the console.
     public static let indexingGrace: TimeInterval = 120
 
     public let credentials: CloudinaryCredentials
@@ -152,11 +152,13 @@ public struct HistorySearch: Sendable {
         return formatter.date(from: text)
     }
 
-    /// The Link History to show: fetched entries plus this Mac's own Uploads that search may not list yet.
-    public static func combine(fetched: [HistoryEntry], unconfirmed: [HistoryEntry], limit: Int = limit) -> [HistoryEntry] {
+    /// The Link History to show: fetched entries plus this Mac's own Uploads that search may not list yet,
+    /// minus Deleted ones that search may still list.
+    public static func combine(fetched: [HistoryEntry], unconfirmed: [HistoryEntry], deleted: Set<String> = [],
+                               limit: Int = limit) -> [HistoryEntry] {
         let fetchedIDs = Set(fetched.map(\.publicID))
         let merged = fetched + unconfirmed.filter { !fetchedIDs.contains($0.publicID) }
-        return Array(merged.sorted { $0.uploadedAt > $1.uploadedAt }.prefix(limit))
+        return Array(merged.filter { !deleted.contains($0.publicID) }.sorted { $0.uploadedAt > $1.uploadedAt }.prefix(limit))
     }
 
     /// Which of this Mac's own Uploads still need to be kept after a successful fetch: the ones it doesn't list
@@ -166,6 +168,13 @@ public struct HistorySearch: Sendable {
         return unconfirmed.filter {
             !fetchedIDs.contains($0.publicID) && fetchStartedAt.timeIntervalSince($0.uploadedAt) < indexingGrace
         }
+    }
+
+    /// Which Deleted public_ids still need hiding after a successful fetch: the ones it still lists, unless the fetch
+    /// started long enough after the Delete that search should have caught up.
+    public static func stillDeleted(_ deleted: [String: Date], fetched: [HistoryEntry], fetchStartedAt: Date) -> [String: Date] {
+        let fetchedIDs = Set(fetched.map(\.publicID))
+        return deleted.filter { fetchedIDs.contains($0.key) && fetchStartedAt.timeIntervalSince($0.value) < indexingGrace }
     }
 }
 

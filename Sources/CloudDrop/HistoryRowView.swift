@@ -1,7 +1,7 @@
 import AppKit
 import CloudDropCore
 
-/// One Link History entry in the menu: thumbnail, filename, size and time columns, and Copy / Open buttons.
+/// One Link History entry in the menu: thumbnail, filename, size and time columns, and Copy / Open / Delete buttons.
 /// A view in a menu item draws its own highlight; `StatusController` sets `isHighlighted`
 /// from `menu(_:willHighlight:)` so hover and arrow keys look like a normal menu item.
 @MainActor
@@ -36,17 +36,20 @@ final class HistoryRowView: NSView {
     private let time: NSTextField
     private let copyButton: RowButton
     private let openButton: RowButton
+    private let deleteButton: RowButton
     private let onCopy: () -> Void
 
     /// `sizeText` is empty when Cloudinary didn't report a size; the cell stays blank rather than claim one.
     init(entry: HistoryEntry, thumbnail image: NSImage?, size sizeText: String, time timeText: String, fullTime: String,
-         sizeWidth: CGFloat, timeWidth: CGFloat, onCopy: @escaping () -> Void, onOpen: @escaping () -> Void) {
+         sizeWidth: CGFloat, timeWidth: CGFloat, onCopy: @escaping () -> Void, onOpen: @escaping () -> Void,
+         onDelete: @escaping () -> Void) {
         self.onCopy = onCopy
         title = NSTextField(labelWithString: entry.filename)
         size = NSTextField(labelWithString: sizeText)
         time = NSTextField(labelWithString: timeText)
         copyButton = RowButton(symbol: "doc.on.doc", label: "Copy Link", action: onCopy)
         openButton = RowButton(symbol: "arrow.up.right.square", label: "Open in Browser", action: onOpen)
+        deleteButton = RowButton(symbol: "trash", label: "Delete…", action: onDelete)
         super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: 30))
         autoresizingMask = .width
         let details = sizeText.isEmpty ? fullTime : "\(fullTime) · \(sizeText)"
@@ -69,7 +72,7 @@ final class HistoryRowView: NSView {
             column.alignment = .right
         }
 
-        for view in [thumbnail, title, size, time, copyButton, openButton] as [NSView] {
+        for view in [thumbnail, title, size, time, copyButton, openButton, deleteButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -89,8 +92,11 @@ final class HistoryRowView: NSView {
             time.centerYAnchor.constraint(equalTo: centerYAnchor),
             copyButton.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -4),
             copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            openButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            // A wider gap, so a slip off Open doesn't land on Delete.
+            openButton.trailingAnchor.constraint(equalTo: deleteButton.leadingAnchor, constant: -10),
             openButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            deleteButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         updateColors()
     }
@@ -132,6 +138,7 @@ final class HistoryRowView: NSView {
         }
         copyButton.isRowHighlighted = isHighlighted
         openButton.isRowHighlighted = isHighlighted
+        deleteButton.isRowHighlighted = isHighlighted
     }
 }
 

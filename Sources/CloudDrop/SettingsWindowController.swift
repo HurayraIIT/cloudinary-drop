@@ -87,9 +87,11 @@ final class SettingsWindowController: NSWindowController {
                 onSaved(credentials)
                 currentLabel.stringValue = "Current cloud: \(credentials.cloudName)"
                 field.stringValue = ""
-                // Uploading is what matters, so a key that can't list uploads is still saved, with a warning.
-                if await Self.cannotList(credentials) {
-                    statusLabel.stringValue = "Saved. This key can upload but can't list uploads, so the Link History will only show this Mac's uploads."
+                // Uploading is what matters, so a key that can't list or delete uploads is still saved, with a warning.
+                let cannotList = await Self.cannotList(credentials)
+                let cannotDelete = await Self.cannotDelete(credentials)
+                if cannotList || cannotDelete {
+                    statusLabel.stringValue = Self.warning(cannotList: cannotList, cannotDelete: cannotDelete)
                     saveButton.isEnabled = true
                     return
                 }
@@ -100,6 +102,30 @@ final class SettingsWindowController: NSWindowController {
                 statusLabel.stringValue = error.localizedDescription
             }
             saveButton.isEnabled = true
+        }
+    }
+
+    private static func warning(cannotList: Bool, cannotDelete: Bool) -> String {
+        switch (cannotList, cannotDelete) {
+        case (true, true): "Saved. This key can upload but can't list or delete uploads, so the Link History will only show this Mac's uploads and Delete will fail."
+        case (true, false): "Saved. This key can upload but can't list uploads, so the Link History will only show this Mac's uploads."
+        default: "Saved. This key can upload but can't delete, so Delete will fail."
+        }
+    }
+
+    /// Only a 403 counts, as for listing.
+    private static func cannotDelete(_ credentials: CloudinaryCredentials) async -> Bool {
+        do {
+            try await Uploader.probeDeletePermission(credentials)
+            return false
+        } catch let error as DeleteError {
+            if case .notAllowedToDelete = error {
+                log.error("Saved key can't delete: \(String(describing: error), privacy: .public)")
+                return true
+            }
+            return false
+        } catch {
+            return false
         }
     }
 

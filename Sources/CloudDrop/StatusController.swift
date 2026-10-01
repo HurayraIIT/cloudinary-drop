@@ -43,6 +43,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         queue.credentials = { [weak self] in self?.credentials() }
         queue.onEvent = { [weak self] event in self?.handle(event) }
         queue.onUploaded = { [weak self] entry, thumbnail in self?.history.add(entry, thumbnail: thumbnail) }
+        queue.onDeleted = { [weak self] entry in self?.history.remove(entry) }
         history.credentials = { [weak self] in self?.credentials() }
         history.onChange = { [weak self] in self?.historyChanged() }
         render()
@@ -268,6 +269,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
                     onOpen: { [weak self] in
                         self?.menu.cancelTracking()
                         NSWorkspace.shared.open(entry.shareLink)
+                    },
+                    onDelete: { [weak self] in
+                        self?.menu.cancelTracking()
+                        // After the menu has finished closing, so the alert isn't run from inside its tracking loop.
+                        Task { @MainActor in self?.confirmDelete(entry) }
                     })
                 item.view = row
                 rowViews[entry.publicID] = row
@@ -313,6 +319,23 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
         guard let link = sender.representedObject as? URL else { return }
         queue.recopy(link)
+    }
+
+    /// Names the file and shows its thumbnail, because a Delete can't be undone. Cancel is the default button.
+    private func confirmDelete(_ entry: HistoryEntry) {
+        let alert = NSAlert()
+        alert.messageText = "Delete \u{201C}\(entry.filename)\u{201D}?"
+        alert.informativeText = "Its Share Link will stop working. This can't be undone."
+        alert.icon = history.thumbnail(for: entry) ?? NSImage(
+            systemSymbolName: entry.kind == .video ? "film" : "photo", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 48, weight: .regular))
+        let cancel = alert.addButton(withTitle: "Cancel")
+        let delete = alert.addButton(withTitle: "Delete")
+        delete.hasDestructiveAction = true
+        cancel.keyEquivalent = "\r"
+        NSApp.activate()
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        queue.delete(entry)
     }
 
     @objc private func openSettings() {

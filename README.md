@@ -59,7 +59,7 @@ cloudinary://<api_key>:<api_secret>@<cloud_name>
 
 > **The key must be allowed to upload.** Cloudinary can restrict what each API key may do. A read-only key is a valid key, but every upload fails with *"missing permissions (actions=["create"])"*. CloudDrop checks for this when you save, and refuses a key that can't upload.
 >
-> It also checks that the key may **list** uploads (Cloudinary's Search API), which the menu's recent links need. A key that can upload but not list is still saved, with a warning, and the menu then only shows what this Mac uploaded.
+> It also checks that the key may **list** uploads (Cloudinary's Search API), which the menu's recent links need, and that it may **delete** them. A key that can upload but not list or delete is still saved, with a warning. Without listing, the menu only shows what this Mac uploaded; without deleting, the trash button fails.
 
 ### 2. Paste it into CloudDrop
 
@@ -90,8 +90,8 @@ Click the icon to see:
 
 | Item | What it does |
 |---|---|
-| ⚠︎ *error* | The last problem from your most recent Drop. Hover for the full text. It clears when you drop something new |
-| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and two buttons: **Copy** and **Open in Browser**. Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
+| ⚠︎ *error* | The last problem from your most recent Drop or Delete. Hover for the full text. It clears when you drop or delete something new |
+| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
@@ -105,7 +105,7 @@ Click the icon to see:
 | ☁︎ (cloud with arrow) | Idle, ready for a Drop |
 | Highlighted | You're dragging at least one image or video over it |
 | ↑ `42%` | Uploading; the percentage is for the current file |
-| ✓ | An upload finished, and its link is on the clipboard |
+| ✓ | An upload finished and its link is on the clipboard, a link was copied, or a Delete finished |
 | ✗ | Something was refused or failed; open the menu to see why |
 
 ## Limits and naming
@@ -136,7 +136,16 @@ Screen Recording 2026-09-28 at 14.15.03.mov
 
 **What the link points to:** the Share Link is the original file, byte for byte. The one exception is **HEIC photos**, which get a `.jpg` link so they display in every browser. Cloudinary converts them when the link is first opened.
 
-CloudDrop only uploads. To delete or rename files, use the Cloudinary console.
+### Deleting an upload
+
+Uploaded the wrong file? Click the **trash** button on its row in the menu. An alert names the file; choose **Delete** to remove it from Cloudinary for good. Its Share Link stops working within a minute or so, and the row disappears. Cancel is the default button, so Return never deletes.
+
+- Any of the 10 recent links can be deleted, whichever Mac uploaded it.
+- There's no undo: the Free plan keeps no backups.
+- The clipboard is left alone, even if it still holds the deleted link.
+- If the file was already deleted (on the other Mac, or in the console), it counts as done.
+
+To rename files, or delete older ones, use the Cloudinary console.
 
 ## Updating and uninstalling
 
@@ -202,7 +211,7 @@ Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30):
 | Memory, idle | about 16 MB after launch, including the first Link History fetch; about 30 MB after some use (opening the menu with its thumbnails, an upload) |
 | CPU, idle | 0.0%, with about 5 threads and no timers or polling; about 0.03 s of CPU a minute and 10–16 idle wakeups a minute |
 | Energy, idle | 0.0 in `top`'s power column, so it doesn't keep the Mac awake |
-| Network, idle | none. One search when it launches, then at most one every 30 seconds, and only when you open the menu. Each thumbnail is about 1 KB |
+| Network, idle | none. One search when it launches, then at most one every 30 seconds, and only when you open the menu. Each thumbnail is about 1 KB. A Delete is one request, and doesn't count toward the hourly limit |
 | Upload of a 75 MB video | about 1 second of CPU in total, peak memory about 17 MB (measured 2026-09-28) |
 
 The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file size. Upload time depends on your connection: 75 MB took about 70 seconds over Wi-Fi.
@@ -246,6 +255,7 @@ docs/adr/          Architecture decisions and what's deliberately out of scope
   - 0004: what's out of scope
   - 0005: short Share Links
   - 0006: recent links fetched from Cloudinary
+  - 0007: deleting from the recent links
 
   Read these before adding features.
 
@@ -278,5 +288,13 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Each image row has a rounded square thumbnail, and each video row a film icon.
 - [ ] Hovering a row or moving with the arrow keys highlights it. Return copies the highlighted row.
 - [ ] Clicking a row or its Copy button copies without opening, closes the menu and flashes ✓. The Open button opens the link and closes the menu.
+- [ ] Each row has a trash button after Open, with a slightly wider gap. It's grey normally and white on the highlighted row, and the filename shortens to make room.
+- [ ] Clicking trash closes the menu and shows an alert naming the file, with its thumbnail (or a film icon), a red **Delete** and a default **Cancel**. Return cancels. Esc cancels or does nothing, but never deletes.
+- [ ] Cancel leaves everything as it was.
+- [ ] Delete flashes ✓, the row is gone from the menu straight away and stays gone across the next few menu opens, and the Share Link 404s within a minute or so. The clipboard is unchanged.
+- [ ] Deleting a video row works the same way.
+- [ ] Deleting a row the other Mac already deleted still flashes ✓ and removes the row.
+- [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
+- [ ] Deleting while a queue of uploads is running doesn't stop or reorder the uploads.
 - [ ] Turning Wi-Fi off mid-upload ends with ✗ and a network error, and the next queued file is still tried.
 - [ ] Launch at Login toggles and survives a restart.

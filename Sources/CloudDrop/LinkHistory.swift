@@ -27,6 +27,8 @@ final class LinkHistory {
     private var fetched: [HistoryEntry] = []
     /// This Mac's own Uploads, kept until a fetch lists them, because search takes a few seconds to catch up.
     private var unconfirmed: [HistoryEntry] = []
+    /// Deleted public_ids and when, hidden until a fetch stops listing them, because search takes a few seconds to catch up.
+    private var deleted: [String: Date] = [:]
     private var thumbnails: [String: NSImage] = [:]
     private var thumbnailsLoading: Set<String> = []
     private var lastFetch: Date?
@@ -48,6 +50,14 @@ final class LinkHistory {
     func add(_ entry: HistoryEntry, thumbnail: NSImage?) {
         unconfirmed = Array(([entry] + unconfirmed).prefix(HistorySearch.limit))
         if let thumbnail { thumbnails[entry.publicID] = thumbnail }
+        update()
+        onChange()
+    }
+
+    /// Hides a Deleted Upload straight away. The list is one short until the next refresh.
+    func remove(_ entry: HistoryEntry) {
+        deleted[entry.publicID] = Date()
+        unconfirmed.removeAll { $0.publicID == entry.publicID }
         update()
         onChange()
     }
@@ -82,6 +92,7 @@ final class LinkHistory {
         entries = []
         fetched = []
         unconfirmed = []
+        deleted = [:]
         thumbnails = [:]
         thumbnailsLoading = []
         hasLoaded = false
@@ -99,6 +110,7 @@ final class LinkHistory {
         case let .success(list):
             fetched = list
             unconfirmed = HistorySearch.stillUnconfirmed(unconfirmed, fetched: list, fetchStartedAt: startedAt)
+            deleted = HistorySearch.stillDeleted(deleted, fetched: list, fetchStartedAt: startedAt)
             hasLoaded = true
             problem = nil
         case let .failure(HistoryFetchError.rateLimited(until)):
@@ -113,7 +125,7 @@ final class LinkHistory {
     }
 
     private func update() {
-        entries = HistorySearch.combine(fetched: fetched, unconfirmed: unconfirmed)
+        entries = HistorySearch.combine(fetched: fetched, unconfirmed: unconfirmed, deleted: Set(deleted.keys))
         let shown = Set(entries.map(\.publicID))
         thumbnails = thumbnails.filter { shown.contains($0.key) }
         loadThumbnails()

@@ -36,8 +36,12 @@ _Avoid_: URL, public link, delivery URL
 The ten most recent Uploads in the account, from either Mac, newest first, each labelled by original filename, the size of the Media File as dropped, and upload time. It is read from Cloudinary, so every Mac shows the same list. Choosing one copies its Share Link again without opening it.
 _Avoid_: Recents, log
 
+**Delete**:
+Permanently removing an uploaded Media File from Cloudinary, chosen from its Link History entry after a confirmation. Its Share Link stops working within minutes, and it cannot be undone.
+_Avoid_: Remove, destroy, trash
+
 **Last Error**:
-The most recent failure message (a refused file or a failed Upload) from the latest Drop, shown in the menu. It clears when the next Drop begins.
+The most recent failure message (a refused file, a failed Upload or a failed Delete), shown in the menu. It clears when the next Drop or Delete begins.
 _Avoid_: Error log
 
 ### Setup

@@ -27,6 +27,8 @@ final class UploadQueue {
     var credentials: () -> CloudinaryCredentials? = { nil }
     /// Each successful Upload, with its thumbnail for images, for the Link History.
     var onUploaded: (HistoryEntry, NSImage?) -> Void = { _, _ in }
+    /// Each successful Delete, so the Link History can hide it.
+    var onDeleted: (HistoryEntry) -> Void = { _ in }
 
     private var pending: [Job] = []
     private var isRunning = false
@@ -72,6 +74,31 @@ final class UploadQueue {
     func recopy(_ link: URL) {
         copyToClipboard(link)
         onEvent(.succeeded)
+    }
+
+    /// Deletes a Link History entry from Cloudinary. It runs at once, alongside any Upload, and like a Drop it
+    /// clears the Last Error when it begins.
+    func delete(_ entry: HistoryEntry) {
+        guard let credentials = credentials() else {
+            refuse("Set Cloudinary URL first")
+            return
+        }
+        lastError = nil
+        onEvent(.changed)
+        log.info("Deleting \(entry.filename, privacy: .public) \(entry.publicID, privacy: .public)")
+        let uploader = uploader(for: credentials)
+        Task {
+            do {
+                let outcome = try await uploader.delete(publicID: entry.publicID, kind: entry.kind)
+                log.info("Deleted \(entry.publicID, privacy: .public)\(outcome == .alreadyGone ? " (it was already gone)" : "", privacy: .public)")
+                onDeleted(entry)
+                onEvent(.succeeded)
+            } catch {
+                log.error("Delete failed for \(entry.publicID, privacy: .public): \(String(describing: error), privacy: .public)")
+                lastError = "Couldn't delete \(entry.filename): \(error.localizedDescription)"
+                onEvent(.failed)
+            }
+        }
     }
 
     private func startIfNeeded() {

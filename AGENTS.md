@@ -14,7 +14,7 @@ CloudDrop is a **personal** macOS menu bar app. The user drops image or video fi
 
 | File | Why |
 |---|---|
-| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Size Limit, Upload, Upload Queue, Share Link, Link History, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
+| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Size Limit, Upload, Upload Queue, Share Link, Link History, Delete, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
 | [docs/adr/](docs/adr/) | **Why things are the way they are.** Don't "fix" anything an ADR explains without discussing it with the user first |
 | [README.md](README.md) | Behaviour as the user sees it, plus the manual test checklist |
 
@@ -25,8 +25,9 @@ The ADRs:
 - **0004:** the explicit list of things that are out of scope.
 - **0005:** short Share Links: random `d/<8 chars>` names, links built from the public_id (root path for images, no version), and uploads that never overwrite.
 - **0006:** the Link History is fetched from Cloudinary's Search API, so both Macs show the same list; Cloudinary-made image thumbnails are the one transformation outside HEIC→JPG.
+- **0007:** Delete from a Link History row: the signed `destroy` with `invalidate=true`, an alert with Cancel as default, Deleted assets hidden locally while search catches up.
 
-`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0007-…`) and keep it to a paragraph or two.
+`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0008-…`) and keep it to a paragraph or two.
 
 ## Environment facts
 
@@ -66,17 +67,18 @@ Sources/
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
     ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle and fileSize
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
-    HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads; HistoryTime labels
+    HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads and hiding Deleted ones; HistoryTime labels
     TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
+    Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
-    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy and Open buttons
-    UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Last Error, logging
-    LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, thumbnail cache
-    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search
+    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy, Open and Delete buttons
+    UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Deletes (alongside, not queued), Last Error, logging
+    LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, hidden Deleted ones, thumbnail cache
+    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete
     KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL
     LoginItem.swift               SMAppService.mainApp; registers once on first launch (on by default)
 Tests/CloudDropCoreTests/         Swift Testing (`import Testing`, @Suite/@Test/#expect) for CloudDropCore only
@@ -113,6 +115,13 @@ Makefile                          Build, bundle, sign, install, and the test wra
 4. Image rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), cached in memory by public_id and pruned to what's shown.
 5. Saving new credentials calls `LinkHistory.reset()`, which clears everything and refetches.
 
+### How a Delete flows
+
+1. The row's trash button closes the menu, then `StatusController.confirmDelete` shows an `NSAlert` (run on the next main-actor turn, outside the menu's tracking loop). Cancel is added first and given Return; Delete is red and has no key equivalent.
+2. `UploadQueue.delete` clears the Last Error and calls `Uploader.delete` at once, alongside any running Upload, on the same session.
+3. `ok` and `not found` both succeed: `LinkHistory.remove` hides the public_id, and ✓ flashes. A failure sets the Last Error to `Couldn't delete <file>: …` and flashes ✗; the row stays.
+4. `HistorySearch.stillDeleted` keeps hiding the public_id while fetches still list it, for up to 2 minutes after the Delete. No fetch is started for it, so the list is one short until the next refresh.
+
 ## Invariants: don't break these
 
 These are decisions the user made during design. Changing any of them needs their explicit approval.
@@ -134,7 +143,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - **Uploads never overwrite.** They're sent with `overwrite=false`. On a taken name, Cloudinary answers **200** describing the *old* file with `"existing": true`, and `Uploader.uploadedFile` turns that into `UploadError.nameTaken`. Without this check, the new Upload would get the old file's link. Leaving the version out is only safe because of this: a default overwrite serves the new bytes even at the old versioned URL.
 
 **Menu**
-- **The Last Error clears when the next Drop begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
+- **The Last Error clears when the next Drop or Delete begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
 - **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 10 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
   - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
   - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
@@ -147,6 +156,7 @@ These are decisions the user made during design. Changing any of them needs thei
   - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
   - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
   - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every action closes the menu, and a copy flashes ✓.
+  - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
 - **Quit is immediate**, with no confirmation while uploads are running.
@@ -189,7 +199,13 @@ These are decisions the user made during design. Changing any of them needs thei
 
    This step exists because the user once pasted a restricted key: it passed the ping, then every upload failed with `403 … missing permissions (actions=["create"])`.
 
-After `verify` passes and the key is saved, the settings window runs one search with `max_results=1`. Only a 403 counts: the key stays saved, and the window stays open with a warning that the Link History will only show this Mac's Uploads. A network error or rate limit says nothing about the key and is ignored.
+After `verify` passes and the key is saved, the settings window runs one search with `max_results=1` and one `Uploader.probeDeletePermission` (a signed destroy of a random public_id that can't exist: `not found` means allowed). Only a 403 counts: the key stays saved, and the window stays open with a warning about the Link History or Delete. A network error or rate limit says nothing about the key and is ignored.
+
+**Delete**
+- `POST /v1_1/<cloud>/<image|video>/destroy`, form-encoded. Signed params: `invalidate=true`, `public_id`, `timestamp`; `api_key` and `signature` aren't signed. Values are percent-encoded in the body (older public_ids contain the filename) but signed as is.
+- It's the Upload API, so it doesn't count toward the Admin API's 500 calls an hour. Don't switch to the Admin API's `DELETE /resources/…` for this.
+- It answers 200 with `{"result":"ok"}` or `{"result":"not found"}`; both count as gone. A 403 becomes `DeleteError.notAllowedToDelete`.
+- `invalidate=true` purges the CDN: a live test saw the Share Link 404 within 20 seconds.
 
 **Link History search**
 - `POST /v1_1/<cloud>/resources/search` with Basic auth and a JSON body: `expression=asset_folder=clouddrop`, `sort_by created_at desc`, `max_results=10`, and `fields` for `public_id`, `format`, `resource_type`, `created_at`, `display_name` and `bytes`.
@@ -228,7 +244,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads) and its time labels.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, and Deletes (the destroy request and its signing and encoding, reading the answer).
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
@@ -241,7 +257,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
   ```
   Here `main.swift` calls `Uploader` or `HistorySearch` directly and reads credentials from an environment variable. Use top-level code, not `-parse-as-library`.
 - To get credentials without printing them, extract `CLOUDINARY_URL` from `~/.zshrc` with `grep` into a shell variable. Never `echo` it, and never read the app's Keychain item: that would prompt the user.
-- Upload only tiny generated files. **Delete every test asset afterwards** with the Admin API, `DELETE /v1_1/<cloud>/resources/<type>/upload?public_ids[]=…`.
+- Upload only tiny generated files. **Delete every test asset afterwards**, with `Uploader.delete` or the Admin API's `DELETE /v1_1/<cloud>/resources/<type>/upload?public_ids[]=…`.
 - To test failure paths without touching the account, use fake credentials such as `cloudinary://1:2@nonexistent-cloud`.
 
 **Measuring memory**
@@ -269,7 +285,7 @@ The app's Last Error text is only in memory. **Ask the user to read the ⚠︎ l
 ## Out of scope (ADR 0004)
 
 Don't add any of these unless the user explicitly asks, and then revisit ADR 0004:
-- deleting or renaming uploads
+- renaming uploads (deleting is in scope since [ADR 0007](docs/adr/0007-delete-from-the-link-history.md))
 - Cloudinary transformations (beyond HEIC → JPG and the Link History's thumbnails)
 - other cloud services
 - Link History written to disk

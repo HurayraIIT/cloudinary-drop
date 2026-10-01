@@ -385,6 +385,87 @@ import UniformTypeIdentifiers
         #expect(HistorySearch.stillUnconfirmed(mine, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 205)) == mine)
         #expect(HistorySearch.stillUnconfirmed(mine, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
     }
+
+    @Test func deletedEntriesAreHiddenAndNotReplacedFromUnconfirmed() {
+        let fetched = (0..<10).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
+        let mine = [entry("d/mine", at: 2000)]
+        let combined = HistorySearch.combine(fetched: fetched, unconfirmed: mine, deleted: ["d/f0", "d/mine"])
+        #expect(combined.map(\.publicID) == (1..<10).map { "d/f\($0)" })
+    }
+
+    @Test func deletedStaysHiddenWhileSearchStillListsItButNotForever() {
+        let deleted = ["d/gone": Date(timeIntervalSince1970: 200)]
+        let listed = [entry("d/gone", at: 100)]
+        #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 205)) == deleted)
+        #expect(HistorySearch.stillDeleted(deleted, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 205)).isEmpty)
+        #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
+    }
+}
+
+@Suite struct Deletes {
+    private let credentials = CloudinaryCredentials(apiKey: "123", apiSecret: "abc", cloudName: "djasqoair")
+    private func body(_ json: String) -> Data { Data(json.utf8) }
+
+    private func form(_ request: URLRequest) -> [String: String] {
+        let text = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        return Dictionary(uniqueKeysWithValues: text.split(separator: "&").map {
+            let pair = $0.split(separator: "=", maxSplits: 1).map(String.init)
+            return (pair[0], pair[1].removingPercentEncoding ?? pair[1])
+        })
+    }
+
+    @Test(arguments: [MediaKind.image, .video])
+    func destroysWithTheResourceTypeAndPurgesTheCache(kind: MediaKind) {
+        let request = Uploader.deleteRequest(credentials: credentials, publicID: "d/k3f9x2ab", kind: kind,
+                                             timestamp: Date(timeIntervalSince1970: 1_790_750_686))
+        #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/\(kind.rawValue)/destroy")
+        #expect(request.httpMethod == "POST")
+        let params = form(request)
+        #expect(params["public_id"] == "d/k3f9x2ab")
+        #expect(params["invalidate"] == "true")
+        #expect(params["api_key"] == "123")
+        #expect(params["signature"] == uploadSignature(
+            ["invalidate": "true", "public_id": "d/k3f9x2ab", "timestamp": "1790750686"], secret: "abc"))
+    }
+
+    @Test func olderPublicIDsAreEncodedButSignedAsIs() throws {
+        let id = "clouddrop/260929_101500_Screen Shot & co+é"
+        let request = Uploader.deleteRequest(credentials: credentials, publicID: id, kind: .image, timestamp: Date(timeIntervalSince1970: 1))
+        let text = String(decoding: try #require(request.httpBody), as: UTF8.self)
+        #expect(!text.contains(" ") && !text.contains("+") && !text.contains("é"))
+        let params = form(request)
+        #expect(params["public_id"] == id)
+        #expect(params["signature"] == uploadSignature(["invalidate": "true", "public_id": id, "timestamp": "1"], secret: "abc"))
+    }
+
+    @Test func okAndNotFoundBothMeanGone() throws {
+        #expect(try Uploader.deleteOutcome(status: 200, data: body(#"{"result":"ok"}"#)) == .deleted)
+        #expect(try Uploader.deleteOutcome(status: 200, data: body(#"{"result":"not found"}"#)) == .alreadyGone)
+    }
+
+    @Test func forbiddenKeepsCloudinaryMessageForTheLog() {
+        let raw = #"missing permissions (actions=["destroy"])"#
+        #expect(throws: DeleteError.notAllowedToDelete(cloudinaryMessage: raw)) {
+            try Uploader.deleteOutcome(status: 403, data: body(#"{"error":{"message":"missing permissions (actions=[\"destroy\"])"}}"#))
+        }
+        let error: any Error = DeleteError.notAllowedToDelete(cloudinaryMessage: raw)
+        #expect(error.localizedDescription.contains("isn't allowed to delete"))
+        #expect(String(describing: error).contains(raw))
+    }
+
+    @Test func otherFailures() {
+        #expect(throws: DeleteError.cloudinary("Cloudinary rejected the API key or secret")) {
+            try Uploader.deleteOutcome(status: 401, data: body("{}"))
+        }
+        #expect(throws: DeleteError.cloudinary("Invalid Signature (HTTP 400)")) {
+            try Uploader.deleteOutcome(status: 400, data: body(#"{"error":{"message":"Invalid Signature"}}"#))
+        }
+        #expect(throws: DeleteError.cloudinary("Cloudinary answered \"error\"")) {
+            try Uploader.deleteOutcome(status: 200, data: body(#"{"result":"error"}"#))
+        }
+        #expect(throws: DeleteError.unexpectedResponse(200)) { try Uploader.deleteOutcome(status: 200, data: body("{}")) }
+        #expect(throws: DeleteError.unexpectedResponse(502)) { try Uploader.deleteOutcome(status: 502, data: body("<html>")) }
+    }
 }
 
 @Suite struct HistoryTimeLabels {
