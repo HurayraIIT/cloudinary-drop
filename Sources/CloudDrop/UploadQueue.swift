@@ -15,8 +15,8 @@ final class UploadQueue {
         let fileURL: URL
         let filename: String
         let kind: MediaKind
-        /// Files received from a file promise live in a temporary folder and are removed after uploading,
-        /// or preserved to Downloads if the upload is refused or fails.
+        /// Files received from a file promise or external temporary drop live in a temporary folder
+        /// and are removed after uploading, or preserved to Downloads if the upload is refused or fails.
         let isTemporary: Bool
     }
 
@@ -52,6 +52,7 @@ final class UploadQueue {
 
     /// Checks a dropped file and queues it if it is a Media File within its Size Limit.
     func add(fileURL: URL, isTemporary: Bool = false) {
+        let isTemp = isTemporary || TemporaryFiles.isTemporary(url: fileURL)
         let filename = fileURL.lastPathComponent
         let result: Result<MediaKind, Refusal>
         if let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey]) {
@@ -63,12 +64,23 @@ final class UploadQueue {
 
         switch result {
         case let .failure(refusal):
-            if isTemporary {
+            if isTemp {
                 TemporaryFiles.preserveTemporaryFile(at: fileURL, originalFilename: filename)
             }
             refuse(refusal.message)
         case let .success(kind):
-            pending.append(Job(fileURL: fileURL, filename: filename, kind: kind, isTemporary: isTemporary))
+            var uploadURL = fileURL
+            if isTemp && !fileURL.path.contains(TemporaryFiles.dropsFolderName) {
+                let folder = TemporaryFiles.dropFolder()
+                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let destination = folder.appendingPathComponent(filename)
+                if (try? FileManager.default.moveItem(at: fileURL, to: destination)) != nil {
+                    uploadURL = destination
+                } else if (try? FileManager.default.copyItem(at: fileURL, to: destination)) != nil {
+                    uploadURL = destination
+                }
+            }
+            pending.append(Job(fileURL: uploadURL, filename: filename, kind: kind, isTemporary: isTemp))
             startIfNeeded()
         }
     }

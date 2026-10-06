@@ -3,7 +3,7 @@ import Foundation
 /// Names the temporary files Uploads need, so the ones left behind can be found and removed.
 public enum TemporaryFiles: Sendable {
     static let prefix = "clouddrop-"
-    static let dropsFolderName = "clouddrop-drops"
+    public static let dropsFolderName = "clouddrop-drops"
 
     /// Where one Upload's multipart body is written before it is sent.
     public static func multipartBody(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
@@ -24,8 +24,23 @@ public enum TemporaryFiles: Sendable {
         }
     }
 
-    /// Moves a temporary file (such as one received from an NSFilePromiseReceiver) to the Downloads
-    /// folder so that refused files or failed uploads are never lost.
+    /// Determines whether a file URL points to a temporary location (e.g. system temporary directories,
+    /// screencapture drag temporary folders, or CloudDrop's drop folder).
+    public static func isTemporary(url: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path
+        return path.hasPrefix(tempDir)
+            || path.hasPrefix("/var/folders/")
+            || path.hasPrefix("/private/var/folders/")
+            || path.hasPrefix("/tmp/")
+            || path.hasPrefix("/private/tmp/")
+            || path.contains("/TemporaryItems/")
+            || path.contains(dropsFolderName)
+    }
+
+    /// Moves a temporary file (such as one received from an NSFilePromiseReceiver or dragged from
+    /// macOS floating screenshot/recording thumbnails) to the Downloads folder so that refused
+    /// files or failed uploads are never lost.
     /// Prefixes the filename with 'cd-' and avoids overwriting existing files by appending a counter.
     @discardableResult
     public static func preserveTemporaryFile(

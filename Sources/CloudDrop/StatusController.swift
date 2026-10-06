@@ -90,14 +90,21 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         guard credentials() != nil else {
             queue.refuse("Set Cloudinary URL first")
             showSettings()
-            if !promises.isEmpty {
+            if !fileURLs.isEmpty {
+                for url in fileURLs where TemporaryFiles.isTemporary(url: url) {
+                    TemporaryFiles.preserveTemporaryFile(at: url)
+                }
+            } else if !promises.isEmpty {
                 receive(promises)
             }
             return true
         }
 
         if !fileURLs.isEmpty {
-            fileURLs.forEach { queue.add(fileURL: $0) }
+            for url in fileURLs {
+                let isTemp = TemporaryFiles.isTemporary(url: url)
+                queue.add(fileURL: url, isTemporary: isTemp)
+            }
         } else {
             receive(promises)
         }

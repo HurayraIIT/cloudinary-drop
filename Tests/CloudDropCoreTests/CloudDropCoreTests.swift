@@ -337,6 +337,39 @@ import UniformTypeIdentifiers
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("nonexistent-\(UUID().uuidString).mov")
         #expect(TemporaryFiles.preserveTemporaryFile(at: file) == nil)
     }
+
+    @Test func detectsTemporaryLocations() {
+        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/var/folders/0m/qq3s5b2s5q130r3yh5q5vxdm0000gn/T/TemporaryItems/NSIRD_screencaptureui_0Cpjmt/Screen Recording 2026-10-06 at 11.48.33\u{202f}PM.mov")))
+        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/var/folders/0m/recording.mov")))
+        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/tmp/sample.png")))
+        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/tmp/sample.png")))
+        #expect(TemporaryFiles.isTemporary(url: TemporaryFiles.dropFolder().appendingPathComponent("file.mov")))
+        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test.mov")))
+
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Users/hurayra/Desktop/my_movie.mov")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Users/hurayra/Downloads/VID_20260918_130730.mp4")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Volumes/External/video.mov")))
+    }
+
+    @Test func preservesExternalTemporaryScreenRecording() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let tempItems = baseDir.appendingPathComponent("TemporaryItems/NSIRD_screencaptureui_test")
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: tempItems, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        let originalName = "Screen Recording 2026-10-06 at 11.48.33\u{202f}PM.mov"
+        let file = tempItems.appendingPathComponent(originalName)
+        try Data("screen recording bytes".utf8).write(to: file)
+
+        let saved = TemporaryFiles.preserveTemporaryFile(at: file, originalFilename: originalName, in: downloads)
+        let expected = downloads.appendingPathComponent("cd-\(originalName)")
+        #expect(saved == expected)
+        #expect(fileManager.fileExists(atPath: expected.path))
+        #expect(!fileManager.fileExists(atPath: file.path))
+    }
 }
 
 @Suite struct ShareLinks {
