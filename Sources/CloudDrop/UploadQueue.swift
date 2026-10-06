@@ -15,7 +15,8 @@ final class UploadQueue {
         let fileURL: URL
         let filename: String
         let kind: MediaKind
-        /// Files received from a file promise live in a temporary folder and are removed after uploading.
+        /// Files received from a file promise live in a temporary folder and are removed after uploading,
+        /// or preserved to Downloads if the upload is refused or fails.
         let isTemporary: Bool
     }
 
@@ -62,7 +63,9 @@ final class UploadQueue {
 
         switch result {
         case let .failure(refusal):
-            if isTemporary { try? FileManager.default.removeItem(at: fileURL) }
+            if isTemporary {
+                TemporaryFiles.preserveTemporaryFile(at: fileURL, originalFilename: filename)
+            }
             refuse(refusal.message)
         case let .success(kind):
             pending.append(Job(fileURL: fileURL, filename: filename, kind: kind, isTemporary: isTemporary))
@@ -110,18 +113,25 @@ final class UploadQueue {
     private func drain() async {
         while !pending.isEmpty {
             let job = pending.removeFirst()
-            await upload(job)
-            if job.isTemporary { try? FileManager.default.removeItem(at: job.fileURL) }
+            let succeeded = await upload(job)
+            if job.isTemporary {
+                if succeeded {
+                    try? FileManager.default.removeItem(at: job.fileURL)
+                } else {
+                    TemporaryFiles.preserveTemporaryFile(at: job.fileURL, originalFilename: job.filename)
+                }
+            }
         }
         progress = nil
         isRunning = false
         onEvent(.changed)
     }
 
-    private func upload(_ job: Job) async {
+    @discardableResult
+    private func upload(_ job: Job) async -> Bool {
         guard let credentials = credentials() else {
             refuse("Set Cloudinary URL first")
-            return
+            return false
         }
         uploadNumber += 1
         let number = uploadNumber
@@ -148,11 +158,13 @@ final class UploadQueue {
                                     uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount), thumbnail)
             progress = nil
             onEvent(.succeeded)
+            return true
         } catch {
             log.error("Upload failed for \(job.filename, privacy: .public): \(String(describing: error), privacy: .public)")
             progress = nil
             lastError = "\(job.filename): \(error.localizedDescription)"
             onEvent(.failed)
+            return false
         }
     }
 

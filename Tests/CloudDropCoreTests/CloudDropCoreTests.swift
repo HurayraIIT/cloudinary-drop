@@ -232,6 +232,111 @@ import UniformTypeIdentifiers
 
         #expect(try fileManager.contentsOfDirectory(atPath: directory.path).sorted() == kept.sorted())
     }
+
+    @Test func preservesTemporaryFileWithPrefix() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let dropFolder = TemporaryFiles.dropFolder(in: baseDir)
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        let file = dropFolder.appendingPathComponent("recording.mov")
+        try Data("test content".utf8).write(to: file)
+
+        let saved = TemporaryFiles.preserveTemporaryFile(at: file, originalFilename: "recording.mov", in: downloads)
+        #expect(saved == downloads.appendingPathComponent("cd-recording.mov"))
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-recording.mov").path))
+        #expect(!fileManager.fileExists(atPath: file.path))
+        #expect(!fileManager.fileExists(atPath: dropFolder.path))
+    }
+
+    @Test func preservesSiblingFilesInDropFolder() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let dropFolder = TemporaryFiles.dropFolder(in: baseDir)
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        let file1 = dropFolder.appendingPathComponent("recording1.mov")
+        let file2 = dropFolder.appendingPathComponent("recording2.mov")
+        try Data("content1".utf8).write(to: file1)
+        try Data("content2".utf8).write(to: file2)
+
+        TemporaryFiles.preserveTemporaryFile(at: file1, originalFilename: "recording1.mov", in: downloads)
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-recording1.mov").path))
+        #expect(fileManager.fileExists(atPath: file2.path))
+        #expect(fileManager.fileExists(atPath: dropFolder.path))
+
+        TemporaryFiles.preserveTemporaryFile(at: file2, originalFilename: "recording2.mov", in: downloads)
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-recording2.mov").path))
+        #expect(!fileManager.fileExists(atPath: file2.path))
+        #expect(!fileManager.fileExists(atPath: dropFolder.path))
+    }
+
+    @Test func preservesTemporaryFileWithoutDuplicatingPrefix() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let dropFolder = TemporaryFiles.dropFolder(in: baseDir)
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        let file = dropFolder.appendingPathComponent("cd-already.mov")
+        try Data("test".utf8).write(to: file)
+
+        let saved = TemporaryFiles.preserveTemporaryFile(at: file, originalFilename: "cd-already.mov", in: downloads)
+        #expect(saved == downloads.appendingPathComponent("cd-already.mov"))
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-already.mov").path))
+    }
+
+    @Test func resolvesCollisionsWithCounter() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let dropFolder = TemporaryFiles.dropFolder(in: baseDir)
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        try Data("1".utf8).write(to: downloads.appendingPathComponent("cd-video.mov"))
+        try Data("2".utf8).write(to: downloads.appendingPathComponent("cd-video 2.mov"))
+
+        let file = dropFolder.appendingPathComponent("video.mov")
+        try Data("3".utf8).write(to: file)
+
+        let saved = TemporaryFiles.preserveTemporaryFile(at: file, originalFilename: "video.mov", in: downloads)
+        #expect(saved == downloads.appendingPathComponent("cd-video 3.mov"))
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-video 3.mov").path))
+    }
+
+    @Test func resolvesCollisionsForFilesWithoutExtension() throws {
+        let fileManager = FileManager.default
+        let baseDir = fileManager.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        let dropFolder = TemporaryFiles.dropFolder(in: baseDir)
+        let downloads = baseDir.appendingPathComponent("Downloads")
+        try fileManager.createDirectory(at: dropFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: baseDir) }
+
+        try Data("1".utf8).write(to: downloads.appendingPathComponent("cd-recording"))
+
+        let file = dropFolder.appendingPathComponent("recording")
+        try Data("2".utf8).write(to: file)
+
+        let saved = TemporaryFiles.preserveTemporaryFile(at: file, originalFilename: "recording", in: downloads)
+        #expect(saved == downloads.appendingPathComponent("cd-recording 2"))
+        #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-recording 2").path))
+    }
+
+    @Test func returnsNilForNonExistentFile() {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("nonexistent-\(UUID().uuidString).mov")
+        #expect(TemporaryFiles.preserveTemporaryFile(at: file) == nil)
+    }
 }
 
 @Suite struct ShareLinks {

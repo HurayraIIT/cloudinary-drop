@@ -3,12 +3,14 @@ BUNDLE_ID  := com.hurayraiit.clouddrop
 APP        := build/$(APP_NAME).app
 
 # Swift Testing ships with Command Line Tools but isn't on SwiftPM's search path (ADR 0001).
-DEV_DIR     := $(shell xcode-select -p)
-TESTING_FW  := $(DEV_DIR)/Library/Developer/Frameworks
-TESTING_LIB := $(DEV_DIR)/Library/Developer/usr/lib
-TEST_FLAGS  := -Xswiftc -F -Xswiftc $(TESTING_FW) \
-               -Xlinker -rpath -Xlinker $(TESTING_FW) \
-               -Xlinker -rpath -Xlinker $(TESTING_LIB)
+DEV_DIR        := $(shell xcode-select -p)
+TESTING_FW     := $(DEV_DIR)/Library/Developer/Frameworks
+TESTING_LIB    := $(DEV_DIR)/Library/Developer/usr/lib
+TESTING_PLUGIN := $(DEV_DIR)/usr/lib/swift/host/plugins/testing
+TEST_FLAGS     := -Xswiftc -F -Xswiftc $(TESTING_FW) \
+                  -Xswiftc -plugin-path -Xswiftc $(TESTING_PLUGIN) \
+                  -Xlinker -rpath -Xlinker $(TESTING_FW) \
+                  -Xlinker -rpath -Xlinker $(TESTING_LIB)
 
 .PHONY: app test install uninstall clean
 

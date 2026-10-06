@@ -84,17 +84,22 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         let pasteboard = sender.draggingPasteboard
         queue.beginDrop()
 
+        let fileURLs = Self.fileURLs(in: pasteboard)
+        let promises = Self.promises(in: pasteboard)
+
         guard credentials() != nil else {
             queue.refuse("Set Cloudinary URL first")
             showSettings()
+            if !promises.isEmpty {
+                receive(promises)
+            }
             return true
         }
 
-        let fileURLs = Self.fileURLs(in: pasteboard)
         if !fileURLs.isEmpty {
             fileURLs.forEach { queue.add(fileURL: $0) }
         } else {
-            receive(Self.promises(in: pasteboard))
+            receive(promises)
         }
         return true
     }
@@ -120,6 +125,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: promiseQueue) { [weak self] url, error in
                 Task { @MainActor in
                     if let error {
+                        let contents = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+                        for file in contents {
+                            TemporaryFiles.preserveTemporaryFile(at: file)
+                        }
+                        try? FileManager.default.removeItem(at: folder)
                         self?.queue.refuse("Couldn't receive the dropped file: \(error.localizedDescription)")
                     } else {
                         self?.queue.add(fileURL: url, isTemporary: true)
