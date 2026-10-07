@@ -68,7 +68,7 @@ Sources/
     ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle and fileSize
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
     HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads and hiding Deleted ones; HistoryTime labels
-    TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them
+    TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them; isTemporary(url:) and saving refused or failed temporary files to Downloads as `cd-<name>`
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
     Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
@@ -95,7 +95,9 @@ Makefile                          Build, bundle, sign, install, and the test wra
 3. `performDragOperation`:
    - calls `queue.beginDrop()`, which **clears the Last Error**
    - checks that credentials exist; if not, it refuses and opens settings
-   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Promised files are received into a temporary folder and deleted after uploading.
+   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own temporary folder.
+   - files from a floating screenshot or screen recording thumbnail (`…/TemporaryItems/…`) are moved into a Drop folder at once, because the system deletes them when the drag ends.
+   - received and moved files are deleted after a successful Upload. A refused or failed one is moved to `~/Downloads/cd-<name>` instead (`cd-<name> 2` on a clash), so a capture is never lost. This also happens when no credentials are set.
 4. `UploadQueue.add` runs `checkMediaFile` (type and Size Limit). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
 5. `drain()` uploads **one at a time**. For each success:
    - `ShareLink.make` builds the Share Link
@@ -130,6 +132,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - **Sequential uploads.** One at a time, in drop order. A new Drop joins the end of the queue, and a failed Upload never stops the rest.
 - **Every successful Upload opens the Share Link in the browser *and* copies it.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
 - **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading. There's no transcoding or downscaling, and no chunked uploads (100 MB is already the plan's per-file maximum).
+- **Only temporary files are ever moved or deleted.** `TemporaryFiles.isTemporary` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-drops/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
 - **Accepted types:** `UTType` conforming to `.image` → image, `.movie` → video. Everything else is refused.
 
 **Naming and links**

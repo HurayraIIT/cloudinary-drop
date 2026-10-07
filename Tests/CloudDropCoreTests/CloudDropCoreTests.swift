@@ -340,12 +340,14 @@ import UniformTypeIdentifiers
 
     @Test func detectsTemporaryLocations() {
         #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/var/folders/0m/qq3s5b2s5q130r3yh5q5vxdm0000gn/T/TemporaryItems/NSIRD_screencaptureui_0Cpjmt/Screen Recording 2026-10-06 at 11.48.33\u{202f}PM.mov")))
-        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/var/folders/0m/recording.mov")))
-        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/tmp/sample.png")))
-        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/tmp/sample.png")))
         #expect(TemporaryFiles.isTemporary(url: TemporaryFiles.dropFolder().appendingPathComponent("file.mov")))
-        #expect(TemporaryFiles.isTemporary(url: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test.mov")))
 
+        // Files the user dragged from Finder are theirs, even in a temporary-looking folder.
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/var/folders/0m/recording.mov")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/tmp/sample.png")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/private/tmp/sample.png")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("test.mov")))
+        #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/tmp/clouddrop-drops-notes/test.mov")))
         #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Users/hurayra/Desktop/my_movie.mov")))
         #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Users/hurayra/Downloads/VID_20260918_130730.mp4")))
         #expect(!TemporaryFiles.isTemporary(url: URL(fileURLWithPath: "/Volumes/External/video.mov")))

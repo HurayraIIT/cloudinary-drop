@@ -24,18 +24,14 @@ public enum TemporaryFiles: Sendable {
         }
     }
 
-    /// Determines whether a file URL points to a temporary location (e.g. system temporary directories,
-    /// screencapture drag temporary folders, or CloudDrop's drop folder).
+    /// Whether a dropped file lives somewhere that disappears after the Drop: the `TemporaryItems`
+    /// folder that floating screenshot and screen recording thumbnails hand over, or CloudDrop's
+    /// own Drop folders. Only these are moved, deleted after uploading or saved to Downloads.
+    /// `/tmp` and the rest of `/var/folders` are left alone, since a file the user dragged from
+    /// there in Finder is theirs and must never be deleted.
     public static func isTemporary(url: URL) -> Bool {
         let path = url.standardizedFileURL.path
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path
-        return path.hasPrefix(tempDir)
-            || path.hasPrefix("/var/folders/")
-            || path.hasPrefix("/private/var/folders/")
-            || path.hasPrefix("/tmp/")
-            || path.hasPrefix("/private/tmp/")
-            || path.contains("/TemporaryItems/")
-            || path.contains(dropsFolderName)
+        return path.contains("/TemporaryItems/") || path.contains("/\(dropsFolderName)/")
     }
 
     /// Moves a temporary file (such as one received from an NSFilePromiseReceiver or dragged from

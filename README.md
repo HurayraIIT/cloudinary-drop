@@ -219,10 +219,25 @@ The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file 
 
 ## Development
 
+```sh
+make test       # unit tests (Swift Testing); fails if the tests fail or if none ran
+make app        # build build/CloudDrop.app without installing
+make install    # build, copy to /Applications, relaunch
+make clean
+```
+
+**Testing without Xcode:**
+- XCTest isn't available with only Command Line Tools, so the tests use Swift Testing.
+- SwiftPM needs extra flags to find Swift Testing, and without them `swift test` quietly runs **zero** tests and still reports success. `make test` passes the flags and checks that tests actually ran. Always use it instead of plain `swift test`.
+
+**Layout:**
+
 ```
 Sources/
-  CloudDropCore/   Upload, URL parsing, signing, size checks, thumbnail generation, Link History
-  CloudDrop/       Menu bar app: status item, drop receiver, upload queue,
+  CloudDropCore/   Pure logic, unit-tested: Cloudinary URL parsing, naming,
+                   signing, size limits, Share Links, the upload request,
+                   the Link History search
+  CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
                    Link History, menu, settings window, Keychain, Launch at Login
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
@@ -264,6 +279,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
 - [ ] A dropped floating thumbnail recording that is refused or fails to upload is safely preserved in Downloads with a `cd-` prefix.
+- [ ] An image dragged from `/tmp` in Finder uploads and is still in `/tmp` afterwards.
 - [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, the full date and the size.
 - [ ] Sizes and times line up in two right-aligned grey columns on every row, including a mix of `Yesterday` and `02:34 PM`. A screenshot name like `SCR-20261001-kywz.png` fits without shortening.
 - [ ] Right after launch, the first click shows the account's recent links, including ones older than this launch, with `Yesterday`/weekday/date labels.

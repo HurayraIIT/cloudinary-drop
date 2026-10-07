@@ -101,10 +101,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         }
 
         if !fileURLs.isEmpty {
-            for url in fileURLs {
-                let isTemp = TemporaryFiles.isTemporary(url: url)
-                queue.add(fileURL: url, isTemporary: isTemp)
-            }
+            fileURLs.forEach { queue.add(fileURL: $0) }
         } else {
             receive(promises)
         }
@@ -125,18 +122,16 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         return .copy
     }
 
+    /// Each promise gets its own folder, and a failed one saves only its own file to Downloads,
+    /// so it never takes the files from the same Drop that are waiting to upload.
     private func receive(_ promises: [NSFilePromiseReceiver]) {
-        let folder = TemporaryFiles.dropFolder()
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for promise in promises {
+            let folder = TemporaryFiles.dropFolder()
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: promiseQueue) { [weak self] url, error in
                 Task { @MainActor in
                     if let error {
-                        let contents = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-                        for file in contents {
-                            TemporaryFiles.preserveTemporaryFile(at: file)
-                        }
-                        try? FileManager.default.removeItem(at: folder)
+                        TemporaryFiles.preserveTemporaryFile(at: url)
                         self?.queue.refuse("Couldn't receive the dropped file: \(error.localizedDescription)")
                     } else {
                         self?.queue.add(fileURL: url, isTemporary: true)
