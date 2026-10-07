@@ -43,7 +43,7 @@ public enum Refusal: Error, Equatable, Sendable {
         case let .unreadable(filename):
             "\(filename) couldn't be read"
         case let .tooLarge(filename, kind, byteCount):
-            "\(filename) is \(megabytes(byteCount)), \(kind.rawValue) limit is \(megabytes(kind.sizeLimit))"
+            "\(filename) is \(megabytes(byteCount, over: kind.sizeLimit)), \(kind.rawValue) limit is \(megabytes(kind.sizeLimit))"
         }
     }
 }
@@ -63,9 +63,15 @@ public func checkMediaFile(filename: String, type: UTType?, byteCount: Int64?) -
     return .success(kind)
 }
 
-func megabytes(_ bytes: Int64) -> String {
-    let value = Double(bytes) / 1_048_576
-    let rounded = (value * 10).rounded() / 10
+/// `over` is the Size Limit a refused file exceeds: a size that would round down to the limit rounds up
+/// instead, so a file just over 10 MB never reads "is 10 MB, image limit is 10 MB".
+func megabytes(_ bytes: Int64, over limit: Int64? = nil) -> String {
+    let tenthsExact = Double(bytes) / 1_048_576 * 10
+    var tenths = tenthsExact.rounded()
+    if let limit, bytes > limit, tenths <= Double(limit) / 1_048_576 * 10 {
+        tenths = tenthsExact.rounded(.up)
+    }
+    let rounded = tenths / 10
     return rounded == rounded.rounded()
         ? "\(Int(rounded)) MB"
         : String(format: "%.1f MB", rounded)

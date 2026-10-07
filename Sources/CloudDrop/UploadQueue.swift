@@ -11,13 +11,21 @@ let log = Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")
 final class UploadQueue {
     enum Event { case changed, succeeded, failed }
 
+    /// Where a Job's file came from, which decides what happens to it once it's uploaded or refused.
+    private enum Origin {
+        /// A file of the user's, e.g. from Finder. It's never moved or deleted.
+        case userFile
+        /// Received from a file promise into a Drop folder. It's deleted afterwards, whatever happened.
+        case received
+        /// A Capture, the only copy. It's deleted once uploaded, and saved to Downloads otherwise.
+        case capture
+    }
+
     private struct Job {
         let fileURL: URL
         let filename: String
         let kind: MediaKind
-        /// Files received from a file promise or external temporary drop live in a temporary folder
-        /// and are removed after uploading, or preserved to Downloads if the upload is refused or fails.
-        let isTemporary: Bool
+        let origin: Origin
     }
 
     private(set) var lastError: String?
@@ -25,7 +33,7 @@ final class UploadQueue {
     private(set) var progress: Double?
 
     var onEvent: (Event) -> Void = { _ in }
-    var credentials: () -> CloudinaryCredentials? = { nil }
+    var credentials: () throws -> CloudinaryCredentials = { throw CredentialsError.notSet }
     /// Each successful Upload, with its thumbnail for images, for the Link History.
     var onUploaded: (HistoryEntry, NSImage?) -> Void = { _, _ in }
     /// Each successful Delete, so the Link History can hide it.
@@ -51,8 +59,9 @@ final class UploadQueue {
     }
 
     /// Checks a dropped file and queues it if it is a Media File within its Size Limit.
-    func add(fileURL: URL, isTemporary: Bool = false) {
-        let isTemp = isTemporary || TemporaryFiles.isTemporary(url: fileURL)
+    /// `received` marks a file received from a file promise.
+    func add(fileURL: URL, received: Bool = false) {
+        let origin: Origin = TemporaryFiles.isCapture(fileURL) ? .capture : received ? .received : .userFile
         let filename = fileURL.lastPathComponent
         let result: Result<MediaKind, Refusal>
         if let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey]) {
@@ -64,24 +73,43 @@ final class UploadQueue {
 
         switch result {
         case let .failure(refusal):
-            if isTemp {
-                TemporaryFiles.preserveTemporaryFile(at: fileURL, originalFilename: filename)
-            }
-            refuse(refusal.message)
+            refuse(discard(fileURL, origin: origin, filename: filename, message: refusal.message))
         case let .success(kind):
-            var uploadURL = fileURL
-            if isTemp && !fileURL.path.contains(TemporaryFiles.dropsFolderName) {
-                let folder = TemporaryFiles.dropFolder()
-                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let destination = folder.appendingPathComponent(filename)
-                if (try? FileManager.default.moveItem(at: fileURL, to: destination)) != nil {
-                    uploadURL = destination
-                } else if (try? FileManager.default.copyItem(at: fileURL, to: destination)) != nil {
-                    uploadURL = destination
-                }
-            }
-            pending.append(Job(fileURL: uploadURL, filename: filename, kind: kind, isTemporary: isTemp))
+            let uploadURL = origin == .capture ? Self.keep(capture: fileURL, filename: filename) : fileURL
+            pending.append(Job(fileURL: uploadURL, filename: filename, kind: kind, origin: origin))
             startIfNeeded()
+        }
+    }
+
+    /// Moves a Capture out of `TemporaryItems` straight away, because macOS deletes it when the drag ends.
+    /// If that fails it's uploaded from where it is, while it lasts.
+    private static func keep(capture fileURL: URL, filename: String) -> URL {
+        let folder = TemporaryFiles.captureFolder()
+        let destination = folder.appendingPathComponent(filename)
+        let fileManager = FileManager.default
+        guard (try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
+              (try? fileManager.moveItem(at: fileURL, to: destination)) != nil
+                || (try? fileManager.copyItem(at: fileURL, to: destination)) != nil
+        else { return fileURL }
+        return destination
+    }
+
+    /// Clears away a file that won't be uploaded, and returns the Last Error `message`, saying so when
+    /// a Capture was saved to Downloads.
+    private func discard(_ fileURL: URL, origin: Origin, filename: String, message: String) -> String {
+        switch origin {
+        case .userFile:
+            return message
+        case .received:
+            TemporaryFiles.remove(fileURL)
+            return message
+        case .capture:
+            guard let saved = TemporaryFiles.saveCaptureToDownloads(fileURL, filename: filename) else {
+                log.error("Couldn't save the Capture \(filename, privacy: .public) to Downloads")
+                return message
+            }
+            log.info("Saved the Capture \(filename, privacy: .public) to \(saved.path, privacy: .public)")
+            return TemporaryFiles.mentioningCaptureSaved(message)
         }
     }
 
@@ -94,8 +122,11 @@ final class UploadQueue {
     /// Deletes a Link History entry from Cloudinary. It runs at once, alongside any Upload, and like a Drop it
     /// clears the Last Error when it begins.
     func delete(_ entry: HistoryEntry) {
-        guard let credentials = credentials() else {
-            refuse("Set Cloudinary URL first")
+        let credentials: CloudinaryCredentials
+        do {
+            credentials = try self.credentials()
+        } catch {
+            refuse(error.localizedDescription)
             return
         }
         lastError = nil
@@ -125,13 +156,15 @@ final class UploadQueue {
     private func drain() async {
         while !pending.isEmpty {
             let job = pending.removeFirst()
-            let succeeded = await upload(job)
-            if job.isTemporary {
-                if succeeded {
-                    try? FileManager.default.removeItem(at: job.fileURL)
-                } else {
-                    TemporaryFiles.preserveTemporaryFile(at: job.fileURL, originalFilename: job.filename)
-                }
+            do {
+                try await upload(job)
+                if job.origin != .userFile { TemporaryFiles.remove(job.fileURL) }
+            } catch {
+                log.error("Upload failed for \(job.filename, privacy: .public): \(String(describing: error), privacy: .public)")
+                progress = nil
+                lastError = discard(job.fileURL, origin: job.origin, filename: job.filename,
+                                    message: "\(job.filename): \(error.localizedDescription)")
+                onEvent(.failed)
             }
         }
         progress = nil
@@ -139,12 +172,8 @@ final class UploadQueue {
         onEvent(.changed)
     }
 
-    @discardableResult
-    private func upload(_ job: Job) async -> Bool {
-        guard let credentials = credentials() else {
-            refuse("Set Cloudinary URL first")
-            return false
-        }
+    private func upload(_ job: Job) async throws {
+        let credentials = try credentials()
         uploadNumber += 1
         let number = uploadNumber
         progress = 0
@@ -152,35 +181,26 @@ final class UploadQueue {
         let publicID = PublicID.make()
         log.info("Uploading \(job.fileURL.path, privacy: .public) as \(job.kind.rawValue, privacy: .public) \(publicID, privacy: .public)")
 
-        do {
-            let file = try await uploader(for: credentials).upload(
-                fileURL: job.fileURL,
-                kind: job.kind,
-                publicID: publicID,
-                displayName: job.filename,
-                progress: { [weak self] fraction in
-                    Task { @MainActor in self?.report(progress: fraction, upload: number) }
-                })
-            let link = ShareLink.make(cloudName: credentials.cloudName, kind: job.kind, file: file)
-            log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
-            copyToClipboard(link)
-            NSWorkspace.shared.open(link)
-            let thumbnail = job.kind == .image ? await Self.thumbnail(of: job.fileURL) : nil
-            onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: job.filename,
-                                    uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount), thumbnail)
-            progress = nil
-            onEvent(.succeeded)
-            return true
-        } catch {
-            log.error("Upload failed for \(job.filename, privacy: .public): \(String(describing: error), privacy: .public)")
-            progress = nil
-            lastError = "\(job.filename): \(error.localizedDescription)"
-            onEvent(.failed)
-            return false
-        }
+        let file = try await uploader(for: credentials).upload(
+            fileURL: job.fileURL,
+            kind: job.kind,
+            publicID: publicID,
+            displayName: job.filename,
+            progress: { [weak self] fraction in
+                Task { @MainActor in self?.report(progress: fraction, upload: number) }
+            })
+        let link = ShareLink.make(cloudName: credentials.cloudName, kind: job.kind, file: file)
+        log.info("Uploaded \(job.filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
+        copyToClipboard(link)
+        NSWorkspace.shared.open(link)
+        let thumbnail = job.kind == .image ? await Self.thumbnail(of: job.fileURL) : nil
+        onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: job.filename,
+                                uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount), thumbnail)
+        progress = nil
+        onEvent(.succeeded)
     }
 
-    /// Made right after the Upload, while the file is still on disk: files received from a file promise
+    /// Made right after the Upload, while the file is still on disk: received files and Captures
     /// are deleted next. Decoding happens off the main actor so the menu bar never stalls.
     private static func thumbnail(of fileURL: URL) async -> NSImage? {
         let side = HistoryRowView.thumbnailSide

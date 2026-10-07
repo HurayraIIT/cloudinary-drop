@@ -73,6 +73,8 @@ final class SettingsWindowController: NSWindowController {
     }
 
     @objc private func save() {
+        // Return in the field still sends this while a check is running.
+        guard saveButton.isEnabled else { return }
         guard let credentials = CloudinaryCredentials(parsing: field.stringValue) else {
             statusLabel.stringValue = "That doesn't look like cloudinary://key:secret@cloud"
             return

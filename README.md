@@ -118,7 +118,7 @@ Click the icon to see:
 | Refused | Everything else (PDFs, zips, folders), and files whose size can't be read |
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
 | Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown |
-| Preserving captures | Files dropped from floating screenshot or screen recording thumbnails live only in temporary storage. If an upload is refused or fails, CloudDrop moves the file to your **Downloads** folder with a `cd-` prefix so your capture is never lost |
+| Captures | A screenshot or recording dropped straight from its floating thumbnail exists nowhere else. If it isn't uploaded (refused, failed, no Cloudinary URL yet, or CloudDrop quit first), it's saved to your **Downloads** folder as `cd-<name>`, and the menu says so. Other files are never moved or deleted |
 
 **Where files end up:** each file gets a random 8-character name in the `d/` folder, so links are short and never reveal the original filename:
 
@@ -190,6 +190,9 @@ Images must be 10 MB or less and videos 100 MB or less. Compress the file first.
 
 **An upload from the other Mac isn't in the menu yet.**
 The list refreshes when you open the menu, but not more than once every 30 seconds, and Cloudinary can take a few seconds to list a new upload. Close the menu and open it again a little later. If the menu says "Couldn't refresh Link History", hover over that line to see why.
+
+**The menu says "Couldn't read the Cloudinary URL from the Keychain".**
+You chose **Deny** on the Keychain prompt, or it was dismissed. Your URL is still saved. Drop a file to be asked again, and choose **Always Allow**.
 
 **No Keychain prompt appeared.**
 That's expected. The prompt only appears after a rebuild.
@@ -278,7 +281,11 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
-- [ ] A dropped floating thumbnail recording that is refused or fails to upload is safely preserved in Downloads with a `cd-` prefix.
+- [ ] A recording dropped from its floating thumbnail uploads, and nothing is left in Downloads.
+- [ ] A refused one (e.g. over 100 MB) is saved as `~/Downloads/cd-<name>`, and the ⚠︎ line ends with "Saved to Downloads."
+- [ ] Quitting while a recording dropped from its floating thumbnail is uploading saves it to Downloads, and the next launch flashes ✗ and shows "Saved 1 unfinished Capture to Downloads".
+- [ ] After a rebuild, choosing **Deny** on the Keychain prompt shows "Couldn't read the Cloudinary URL from the Keychain" without opening settings. Clicking the icon again doesn't bring the prompt back. The next Drop asks again, and **Always Allow** uploads it and fills in the recent links.
+- [ ] Pressing Return twice quickly in the settings window checks the URL only once.
 - [ ] An image dragged from `/tmp` in Finder uploads and is still in `/tmp` afterwards.
 - [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, the full date and the size.
 - [ ] Sizes and times line up in two right-aligned grey columns on every row, including a mix of `Yesterday` and `02:34 PM`. A screenshot name like `SCR-20261001-kywz.png` fits without shortening.

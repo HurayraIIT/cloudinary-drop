@@ -3,19 +3,32 @@ import CloudDropCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// How many Captures the cleanup at quit saved to Downloads, so the next launch can say so.
+    private static let capturesSavedAtQuitKey = "capturesSavedAtQuit"
+
     private var statusController: StatusController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Also catches what a crash or `make install`'s pkill left, which skip applicationWillTerminate.
-        TemporaryFiles.removeLeftovers()
+        let defaults = UserDefaults.standard
+        let savedCaptures = TemporaryFiles.removeLeftovers() + defaults.integer(forKey: Self.capturesSavedAtQuitKey)
+        defaults.removeObject(forKey: Self.capturesSavedAtQuitKey)
         NSApp.mainMenu = Self.makeMainMenu()
         LoginItem.enableOnFirstLaunch()
         statusController = StatusController()
+        if savedCaptures > 0 {
+            log.info("Saved \(savedCaptures, privacy: .public) unfinished Captures to Downloads")
+            statusController?.reportCapturesSaved(savedCaptures)
+        }
     }
 
-    /// Quit is immediate (ADR 0004), so an Upload in progress never gets to delete its files.
+    /// Quit is immediate (ADR 0004), so an Upload in progress never gets to delete its files,
+    /// and Captures still in the Upload Queue are saved to Downloads.
     func applicationWillTerminate(_ notification: Notification) {
-        TemporaryFiles.removeLeftovers()
+        let saved = TemporaryFiles.removeLeftovers()
+        guard saved > 0 else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(defaults.integer(forKey: Self.capturesSavedAtQuitKey) + saved, forKey: Self.capturesSavedAtQuitKey)
     }
 
     /// A menu-bar-only app has no visible main menu, but without one ⌘V doesn't paste

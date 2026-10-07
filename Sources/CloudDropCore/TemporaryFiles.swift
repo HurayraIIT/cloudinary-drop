@@ -1,89 +1,114 @@
 import Foundation
 
-/// Names the temporary files Uploads need, so the ones left behind can be found and removed.
+/// Names the temporary files Uploads need, so the ones left behind can be found and removed,
+/// and keeps Captures apart from them, because a Capture is the only copy and is never deleted unuploaded.
 public enum TemporaryFiles: Sendable {
     static let prefix = "clouddrop-"
-    public static let dropsFolderName = "clouddrop-drops"
+    static let dropsFolderName = "clouddrop-drops"
+    static let capturesFolderName = "clouddrop-captures"
 
     /// Where one Upload's multipart body is written before it is sent.
     public static func multipartBody(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
         directory.appendingPathComponent("\(prefix)\(UUID().uuidString).multipart")
     }
 
-    /// A fresh folder for the files a Drop hands over as file promises.
+    /// A fresh folder for a file a Drop hands over as a file promise.
     public static func dropFolder(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
         directory.appendingPathComponent("\(dropsFolderName)/\(UUID().uuidString)", isDirectory: true)
     }
 
-    /// Removes multipart bodies and received Drop files. Quitting mid-upload skips the `defer`
-    /// that normally deletes a body, and a video's body can be 100 MB.
-    public static func removeLeftovers(in directory: URL = FileManager.default.temporaryDirectory) {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        for name in names where name == dropsFolderName || (name.hasPrefix(prefix) && name.hasSuffix(".multipart")) {
-            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
-        }
+    /// A fresh folder a Capture is moved into while it waits in the Upload Queue, since macOS deletes
+    /// the original when the drag ends.
+    public static func captureFolder(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
+        directory.appendingPathComponent("\(capturesFolderName)/\(UUID().uuidString)", isDirectory: true)
     }
 
-    /// Whether a dropped file lives somewhere that disappears after the Drop: the `TemporaryItems`
-    /// folder that floating screenshot and screen recording thumbnails hand over, or CloudDrop's
-    /// own Drop folders. Only these are moved, deleted after uploading or saved to Downloads.
-    /// `/tmp` and the rest of `/var/folders` are left alone, since a file the user dragged from
-    /// there in Finder is theirs and must never be deleted.
-    public static func isTemporary(url: URL) -> Bool {
+    /// Whether a dropped file is a Capture: still in the `TemporaryItems` folder floating screenshot and
+    /// screen recording thumbnails hand over, or already moved into a capture folder. A file the user
+    /// dragged from `/tmp` or anywhere else in Finder is theirs and never counts.
+    public static func isCapture(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path
-        return path.contains("/TemporaryItems/") || path.contains("/\(dropsFolderName)/")
+        return path.contains("/TemporaryItems/") || path.contains("/\(capturesFolderName)/")
     }
 
-    /// Moves a temporary file (such as one received from an NSFilePromiseReceiver or dragged from
-    /// macOS floating screenshot/recording thumbnails) to the Downloads folder so that refused
-    /// files or failed uploads are never lost.
-    /// Prefixes the filename with 'cd-' and avoids overwriting existing files by appending a counter.
+    /// Removes multipart bodies and received Drop files, and saves any Capture still waiting to Downloads.
+    /// Quitting mid-upload skips the `defer` that normally deletes a body, and a video's body can be 100 MB.
+    /// Returns how many Captures were saved.
     @discardableResult
-    public static func preserveTemporaryFile(
-        at sourceURL: URL,
-        originalFilename: String? = nil,
-        in destinationDirectory: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+    public static func removeLeftovers(in directory: URL = FileManager.default.temporaryDirectory,
+                                       downloads: URL = downloadsFolder) -> Int {
+        let fileManager = FileManager.default
+        let captures = directory.appendingPathComponent(capturesFolderName)
+        var saved = 0
+        for folder in (try? fileManager.contentsOfDirectory(at: captures, includingPropertiesForKeys: nil)) ?? [] {
+            for file in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
+                if saveCaptureToDownloads(file, in: downloads) != nil { saved += 1 }
+            }
+        }
+        let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name == dropsFolderName || name == capturesFolderName
+            || (name.hasPrefix(prefix) && name.hasSuffix(".multipart")) {
+            try? fileManager.removeItem(at: directory.appendingPathComponent(name))
+        }
+        return saved
+    }
+
+    /// A Last Error that also says the Capture it's about was saved to Downloads.
+    public static func mentioningCaptureSaved(_ message: String) -> String {
+        message + (message.hasSuffix(".") ? " " : ". ") + "Saved to Downloads."
+    }
+
+    /// The Last Error after Captures left by a quit or crash were saved to Downloads.
+    public static func capturesSavedMessage(count: Int) -> String {
+        "Saved \(count) unfinished Capture\(count == 1 ? "" : "s") to Downloads"
+    }
+
+    /// Deletes a received file or uploaded Capture, and its Drop or capture folder once that's empty.
+    public static func remove(_ fileURL: URL) {
+        try? FileManager.default.removeItem(at: fileURL)
+        removeFolderIfEmpty(of: fileURL)
+    }
+
+    public static var downloadsFolder: URL {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
-    ) -> URL? {
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else { return nil }
+    }
 
-        try? FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+    /// Moves a Capture that won't be uploaded to Downloads as `cd-<filename>`, adding ` 2`, ` 3`… rather than
+    /// overwrite. Nil when the file is missing or can't be moved or copied.
+    @discardableResult
+    public static func saveCaptureToDownloads(_ sourceURL: URL, filename: String? = nil,
+                                              in downloads: URL = downloadsFolder) -> URL? {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: sourceURL.path) else { return nil }
+        try? fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
 
-        let filename = originalFilename ?? sourceURL.lastPathComponent
-        let prefixedName = filename.hasPrefix("cd-") ? filename : "cd-\(filename)"
+        let name = filename ?? sourceURL.lastPathComponent
+        let prefixedName = name.hasPrefix("cd-") ? name : "cd-\(name)"
         let ext = (prefixedName as NSString).pathExtension
         let base = (prefixedName as NSString).deletingPathExtension
 
-        var destinationURL = destinationDirectory.appendingPathComponent(prefixedName)
+        var destination = downloads.appendingPathComponent(prefixedName)
         var counter = 2
-        while FileManager.default.fileExists(atPath: destinationURL.path) {
-            let candidateName = ext.isEmpty ? "\(base) \(counter)" : "\(base) \(counter).\(ext)"
-            destinationURL = destinationDirectory.appendingPathComponent(candidateName)
+        while fileManager.fileExists(atPath: destination.path) {
+            destination = downloads.appendingPathComponent(ext.isEmpty ? "\(base) \(counter)" : "\(base) \(counter).\(ext)")
             counter += 1
         }
 
-        do {
-            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
-            cleanupParentDropFolder(of: sourceURL)
-            return destinationURL
-        } catch {
-            do {
-                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-                try? FileManager.default.removeItem(at: sourceURL)
-                cleanupParentDropFolder(of: sourceURL)
-                return destinationURL
-            } catch {
-                return nil
-            }
+        if (try? fileManager.moveItem(at: sourceURL, to: destination)) == nil {
+            guard (try? fileManager.copyItem(at: sourceURL, to: destination)) != nil else { return nil }
+            try? fileManager.removeItem(at: sourceURL)
         }
+        removeFolderIfEmpty(of: sourceURL)
+        return destination
     }
 
-    private static func cleanupParentDropFolder(of fileURL: URL) {
-        let parent = fileURL.deletingLastPathComponent()
-        guard parent.lastPathComponent != dropsFolderName && parent.path.contains(dropsFolderName) else { return }
-        let siblings = (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? []
-        if siblings.isEmpty {
-            try? FileManager.default.removeItem(at: parent)
-        }
+    /// Only ever a per-file folder inside `clouddrop-drops` or `clouddrop-captures`, never anything of the user's.
+    private static func removeFolderIfEmpty(of fileURL: URL) {
+        let folder = fileURL.deletingLastPathComponent()
+        guard [dropsFolderName, capturesFolderName].contains(folder.deletingLastPathComponent().lastPathComponent),
+              ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? ["?"]).isEmpty
+        else { return }
+        try? FileManager.default.removeItem(at: folder)
     }
 }

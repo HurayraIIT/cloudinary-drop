@@ -68,7 +68,7 @@ Sources/
     ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle and fileSize
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
     HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads and hiding Deleted ones; HistoryTime labels
-    TemporaryFiles.swift          Names the multipart bodies and Drop folders in $TMPDIR; removeLeftovers() sweeps them; isTemporary(url:) and saving refused or failed temporary files to Downloads as `cd-<name>`
+    TemporaryFiles.swift          Names the multipart bodies, Drop folders and capture folders in $TMPDIR; isCapture; saves Captures to Downloads as `cd-<name>`; removeLeftovers() sweeps the rest and saves leftover Captures
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
     Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
@@ -94,10 +94,9 @@ Makefile                          Build, bundle, sign, install, and the test wra
 2. `draggingEntered`/`draggingUpdated` accept any file drag (`.copy`) but only **highlight** the button when at least one file is an image or video. This lets a PDF-only drop be refused with a visible Last Error rather than silently bouncing back.
 3. `performDragOperation`:
    - calls `queue.beginDrop()`, which **clears the Last Error**
-   - checks that credentials exist; if not, it refuses and opens settings
-   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own temporary folder.
-   - files from a floating screenshot or screen recording thumbnail (`…/TemporaryItems/…`) are moved into a Drop folder at once, because the system deletes them when the drag ends.
-   - received and moved files are deleted after a successful Upload. A refused or failed one is moved to `~/Downloads/cd-<name>` instead (`cd-<name> 2` on a clash), so a capture is never lost. This also happens when no credentials are set.
+   - retries the Keychain read if the last one failed, then checks that credentials exist. If not, it refuses, saves any Captures in the Drop to Downloads, and opens settings when no Cloudinary URL is saved (not when the Keychain couldn't be read)
+   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own Drop folder and is deleted afterwards, whatever happened.
+   - a Capture (a file URL in `…/TemporaryItems/…`, from a floating screenshot or screen recording thumbnail) is moved into its own capture folder at once, because macOS deletes it when the drag ends. It's deleted after a successful Upload; refused or failed, it's moved to `~/Downloads/cd-<name>` (`cd-<name> 2` on a clash) and the Last Error ends with "Saved to Downloads."
 4. `UploadQueue.add` runs `checkMediaFile` (type and Size Limit). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
 5. `drain()` uploads **one at a time**. For each success:
    - `ShareLink.make` builds the Share Link
@@ -132,7 +131,8 @@ These are decisions the user made during design. Changing any of them needs thei
 - **Sequential uploads.** One at a time, in drop order. A new Drop joins the end of the queue, and a failed Upload never stops the rest.
 - **Every successful Upload opens the Share Link in the browser *and* copies it.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
 - **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading. There's no transcoding or downscaling, and no chunked uploads (100 MB is already the plan's per-file maximum).
-- **Only temporary files are ever moved or deleted.** `TemporaryFiles.isTemporary` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-drops/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
+- **A user's files are never moved or deleted.** Only Captures and files received from a file promise are. `TemporaryFiles.isCapture` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-captures/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
+- **A Capture is never lost.** It's the only copy, so whenever it won't be uploaded (refused, failed, no Cloudinary URL, or CloudDrop quits or crashes first) it's saved to Downloads, and the Last Error says so. Captures saved by the cleanup at quit are counted in the `capturesSavedAtQuit` UserDefaults key, and the next launch reports them with those found at launch: "Saved 2 unfinished Captures to Downloads", with a ✗ flash. Files received from a file promise are never saved: their original still exists.
 - **Accepted types:** `UTType` conforming to `.image` → image, `.movie` → video. Everything else is refused.
 
 **Naming and links**
@@ -168,6 +168,7 @@ These are decisions the user made during design. Changing any of them needs thei
 **Setup**
 - **Launch at Login** is registered once on first launch, tracked by the `didApplyDefaultLoginItem` UserDefaults flag, and toggled from the menu.
 - **Credentials** are read from the Keychain once, at launch for the first Link History fetch, and cached in `StatusController`. After a rebuild the Keychain prompt therefore appears as soon as the new build starts. The settings window updates the cache when it saves.
+  - Only "no item" is cached as missing. Any other failure (e.g. Deny on the prompt) sets the Last Error "Couldn't read the Cloudinary URL from the Keychain" and is retried on the **next Drop only**, never on menu clicks, so a Deny doesn't bring the prompt back every time the icon is clicked.
 
 ## The Cloudinary API: what matters
 
@@ -191,7 +192,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - Each chunk is copied inside `autoreleasepool`. Without it every chunk stays alive until the upload finishes: a 75 MB video peaked at about 80 MB before this fix and about 17 MB after. Never load a whole file into `Data`.
 - Progress comes from a per-task `URLSessionTaskDelegate` (`didSendBodyData`) and is hopped to the main actor. `UploadQueue` ignores progress from an earlier Upload and only redraws the icon when the whole percentage changes.
 - `UploadQueue` keeps **one `Uploader` (one `URLSession`)** and reuses it while the Cloudinary URL stays the same. A replaced one is `invalidate()`d.
-- Quitting mid-upload skips the `defer` that deletes the multipart body, so `TemporaryFiles.removeLeftovers()` runs at launch and in `applicationWillTerminate`. It only touches `clouddrop-*.multipart` and `clouddrop-drops/`.
+- Quitting mid-upload skips the `defer` that deletes the multipart body, so `TemporaryFiles.removeLeftovers()` runs at launch and in `applicationWillTerminate`. It only touches `clouddrop-*.multipart`, `clouddrop-drops/` and `clouddrop-captures/`, and it saves any Capture left in `clouddrop-captures/` to Downloads before deleting the folder.
 
 **Checking credentials: `Uploader.verify`**
 1. `GET /ping` with Basic auth. This proves the key and secret are valid, but **not** that the key may upload.

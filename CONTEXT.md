@@ -14,6 +14,10 @@ _Avoid_: Drag, import, batch
 A file in a Drop that is an image or a video and fits the account's Size Limit. Anything else in a Drop is refused.
 _Avoid_: Asset, attachment, item
 
+**Capture**:
+A screenshot or screen recording dropped straight from its floating thumbnail, before macOS has saved it anywhere, so CloudDrop holds the only copy. A Capture that isn't uploaded is saved to Downloads instead of being lost.
+_Avoid_: Temporary file, floating thumbnail, screen grab
+
 **Size Limit**:
 The largest file the Cloudinary account accepts: one limit for images and a larger one for videos.
 _Avoid_: Quota, max size
@@ -41,7 +45,7 @@ Permanently removing an uploaded Media File from Cloudinary, chosen from its Lin
 _Avoid_: Remove, destroy, trash
 
 **Last Error**:
-The most recent failure message (a refused file, a failed Upload or a failed Delete), shown in the menu. It clears when the next Drop or Delete begins.
+The most recent failure message (a refused file, a failed Upload or Delete, Captures saved to Downloads, or a Cloudinary URL that couldn't be read), shown in the menu. It clears when the next Drop or Delete begins.
 _Avoid_: Error log
 
 ### Setup

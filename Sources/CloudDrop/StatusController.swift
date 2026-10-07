@@ -13,12 +13,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private let menu = NSMenu()
     private let promiseQueue = OperationQueue()
     private lazy var settings = SettingsWindowController { [weak self] saved in
-        self?.cachedCredentials = saved
+        self?.storedCredentials = .success(saved)
         self?.history.reset()
     }
 
-    private var cachedCredentials: CloudinaryCredentials?
-    private var didLoadCredentials = false
+    /// Nil until the Keychain has been read. A success holds nil when no Cloudinary URL is saved.
+    private var storedCredentials: Result<CloudinaryCredentials?, CredentialsError>?
     private var flash: Flash?
     private var flashToken = 0
 
@@ -40,11 +40,14 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         window?.registerForDraggedTypes([.fileURL] + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) })
         window?.delegate = self
 
-        queue.credentials = { [weak self] in self?.credentials() }
+        queue.credentials = { [weak self] in
+            guard let self else { throw CredentialsError.notSet }
+            return try self.credentials()
+        }
         queue.onEvent = { [weak self] event in self?.handle(event) }
         queue.onUploaded = { [weak self] entry, thumbnail in self?.history.add(entry, thumbnail: thumbnail) }
         queue.onDeleted = { [weak self] entry in self?.history.remove(entry) }
-        history.credentials = { [weak self] in self?.credentials() }
+        history.credentials = { [weak self] in try? self?.credentials() }
         history.onChange = { [weak self] in self?.historyChanged() }
         render()
         // So the first click already shows the Link History.
@@ -54,13 +57,27 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     // MARK: Credentials
 
     /// Read once and cached. The first read happens at launch, for the Link History, so after a rebuild
-    /// the Keychain prompt appears when the new build starts.
-    private func credentials() -> CloudinaryCredentials? {
-        if !didLoadCredentials {
-            cachedCredentials = KeychainStore.load()
-            didLoadCredentials = true
+    /// the Keychain prompt appears when the new build starts. A failed read is only tried again by the
+    /// next Drop, so choosing Deny doesn't bring the prompt back on every click of the icon.
+    private func credentials() throws(CredentialsError) -> CloudinaryCredentials {
+        if storedCredentials == nil { readCredentials() }
+        guard let credentials = try storedCredentials?.get() else { throw .notSet }
+        return credentials
+    }
+
+    private func readCredentials() {
+        do {
+            storedCredentials = .success(try KeychainStore.load())
+        } catch {
+            storedCredentials = .failure(error)
+            log.error("\(String(describing: error), privacy: .public)")
+            queue.refuse(error.localizedDescription)
         }
-        return cachedCredentials
+    }
+
+    /// Captures saved to Downloads by the cleanup at the last quit or at this launch.
+    func reportCapturesSaved(_ count: Int) {
+        queue.refuse(TemporaryFiles.capturesSavedMessage(count: count))
     }
 
     // MARK: Drops
@@ -83,27 +100,27 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         statusItem.button?.highlight(false)
         let pasteboard = sender.draggingPasteboard
         queue.beginDrop()
-
         let fileURLs = Self.fileURLs(in: pasteboard)
-        let promises = Self.promises(in: pasteboard)
 
-        guard credentials() != nil else {
-            queue.refuse("Set Cloudinary URL first")
-            showSettings()
-            if !fileURLs.isEmpty {
-                for url in fileURLs where TemporaryFiles.isTemporary(url: url) {
-                    TemporaryFiles.preserveTemporaryFile(at: url)
-                }
-            } else if !promises.isEmpty {
-                receive(promises)
-            }
+        if case .failure = storedCredentials {
+            readCredentials()
+            if case .success = storedCredentials { history.refresh() }
+        }
+        do throws(CredentialsError) {
+            _ = try credentials()
+        } catch {
+            // A Capture is the only copy, so it goes to Downloads rather than vanish with the drag.
+            let saved = fileURLs.filter(TemporaryFiles.isCapture).compactMap { TemporaryFiles.saveCaptureToDownloads($0) }
+            let message = error.localizedDescription
+            queue.refuse(saved.isEmpty ? message : TemporaryFiles.mentioningCaptureSaved(message))
+            if case .notSet = error { showSettings() }
             return true
         }
 
         if !fileURLs.isEmpty {
             fileURLs.forEach { queue.add(fileURL: $0) }
         } else {
-            receive(promises)
+            receive(Self.promises(in: pasteboard))
         }
         return true
     }
@@ -122,8 +139,8 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         return .copy
     }
 
-    /// Each promise gets its own folder, and a failed one saves only its own file to Downloads,
-    /// so it never takes the files from the same Drop that are waiting to upload.
+    /// Each promise gets its own folder, so a failed one only removes its own file, never the files from
+    /// the same Drop that are waiting to upload.
     private func receive(_ promises: [NSFilePromiseReceiver]) {
         for promise in promises {
             let folder = TemporaryFiles.dropFolder()
@@ -131,10 +148,10 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: promiseQueue) { [weak self] url, error in
                 Task { @MainActor in
                     if let error {
-                        TemporaryFiles.preserveTemporaryFile(at: url)
+                        TemporaryFiles.remove(url)
                         self?.queue.refuse("Couldn't receive the dropped file: \(error.localizedDescription)")
                     } else {
-                        self?.queue.add(fileURL: url, isTemporary: true)
+                        self?.queue.add(fileURL: url, received: true)
                     }
                 }
             }
@@ -363,6 +380,6 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     private func showSettings() {
-        settings.show(current: credentials())
+        settings.show(current: try? credentials())
     }
 }
