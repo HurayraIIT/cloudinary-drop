@@ -75,7 +75,7 @@ It's on by default. Toggle it from the menu.
 
 ## Using it
 
-**Drag image or video files onto the cloud icon.** Files from Finder and the floating screenshot thumbnail both work.
+**Drag image or video files onto the cloud icon.** Files from Finder, file promises (Photos, Mail), and floating screenshot or screen recording thumbnails ([Captures](#limits-and-naming)) all work.
 
 For each file:
 1. The icon shows upload progress: `↑ 42%`.
@@ -90,13 +90,13 @@ Click the icon to see:
 
 | Item | What it does |
 |---|---|
-| ⚠︎ *error* | The last problem from your most recent Drop or Delete. Hover for the full text. It clears when you drop or delete something new |
+| ⚠︎ *error* | The last problem from your most recent Drop or Delete, or Captures saved to Downloads at launch. Hover for the full text. It clears when you drop or delete something new |
 | Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Launch at Login | Start CloudDrop when you log in |
-| Quit CloudDrop | Quits immediately. Any unfinished uploads are dropped |
+| Quit CloudDrop | Quits immediately. Any running uploads stop, and unfinished Captures are saved to Downloads |
 
 ### Icon states
 
@@ -106,7 +106,7 @@ Click the icon to see:
 | Highlighted | You're dragging at least one image or video over it |
 | ↑ `42%` | Uploading; the percentage is for the current file |
 | ✓ | An upload finished and its link is on the clipboard, a link was copied, or a Delete finished |
-| ✗ | Something was refused or failed; open the menu to see why |
+| ✗ | Something was refused or failed, or unfinished Captures were saved to Downloads at launch; open the menu to see why |
 
 ## Limits and naming
 
@@ -119,6 +119,8 @@ Click the icon to see:
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
 | Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown |
 | Captures | A screenshot or recording dropped straight from its floating thumbnail exists nowhere else. If it isn't uploaded (refused, failed, no Cloudinary URL yet, or CloudDrop quit first), it's saved to your **Downloads** folder as `cd-<name>`, and the menu says so. Other files are never moved or deleted |
+
+Files dragged from apps such as Photos or Mail arrive as file promises into their own temporary folders and are deleted after uploading; because the original still exists in the source app, they are not saved to Downloads if refused or failed. Files dragged from Finder or other folders are never moved or deleted.
 
 **Where files end up:** each file gets a random 8-character name in the `d/` folder, so links are short and never reveal the original filename:
 
@@ -239,12 +241,12 @@ make clean
 Sources/
   CloudDropCore/   Pure logic, unit-tested: Cloudinary URL parsing, naming,
                    signing, size limits, Share Links, the upload request,
-                   the Link History search
+                   the Link History search, Deletes, temporary file and Capture handling
   CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
                    Link History, menu, settings window, Keychain, Launch at Login
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
-CONTEXT.md         Glossary: Drop, Media File, Upload, Share Link, …
+CONTEXT.md         Glossary: Drop, Media File, Capture, Size Limit, Upload, Share Link, …
 docs/adr/          Architecture decisions and what's deliberately out of scope
 ```
 
@@ -268,6 +270,7 @@ docs/adr/          Architecture decisions and what's deliberately out of scope
 Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After changing them, check:
 
 - [ ] Before any URL is saved, a Drop shows "Set Cloudinary URL first", flashes ✗ and opens the settings window.
+- [ ] Before any URL is saved, dropping a Capture preserves it to Downloads as `cd-<name>`.
 - [ ] A wrong secret in settings shows "Cloudinary rejected the API key or secret" and saves nothing.
 - [ ] A read-only API key is refused at Save with "isn't allowed to upload".
 - [ ] ⌘V pastes into the settings field.
@@ -294,7 +297,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Your own new upload appears at the top immediately and doesn't disappear and reappear a few seconds later.
 - [ ] With the menu open while a refresh finishes, the rows update in place without jumping more than needed, and the highlight stays on the same entry.
 - [ ] With Wi-Fi off, opening the menu keeps the old list and shows "Couldn't refresh Link History", with the reason on hover. Turning Wi-Fi back on clears it at the next refresh.
-- [ ] Saving a key that can upload but not list shows the warning and keeps the window open.
+- [ ] Saving a key that can upload but not list or delete shows the warning and keeps the window open.
 - [ ] Each image row has a rounded square thumbnail, and each video row a film icon.
 - [ ] Hovering a row or moving with the arrow keys highlights it. Return copies the highlighted row.
 - [ ] Clicking a row or its Copy button copies without opening, closes the menu and flashes ✓. The Open button opens the link and closes the menu.
