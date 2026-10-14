@@ -14,7 +14,7 @@ CloudDrop is a **personal** macOS menu bar app. The user drops image or video fi
 
 | File | Why |
 |---|---|
-| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Size Limit, Upload, Upload Queue, Share Link, Link History, Delete, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
+| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Size Limit, Upload, Upload Queue, Share Link, Link History, Delete, Usage, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
 | [docs/adr/](docs/adr/) | **Why things are the way they are.** Don't "fix" anything an ADR explains without discussing it with the user first |
 | [README.md](README.md) | Behaviour as the user sees it, plus the manual test checklist |
 
@@ -71,13 +71,16 @@ Sources/
     TemporaryFiles.swift          Names the multipart bodies, Drop folders and capture folders in $TMPDIR; isCapture; saves Captures to Downloads as `cd-<name>`; removeLeftovers() sweeps the rest and saves leftover Captures
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
     Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
+    Usage.swift                   Usage (the menu line's text), UsageSchedule (when each call is due) and UsageReader: the Usage API's stored bytes and credits, and the account-wide image and video counts
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
     HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy, Open and Delete buttons
+    UsageRowView.swift            The Usage line's menu row: one label in the filenames' font and colour, never highlighted
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Deletes (alongside, not queued), Last Error, logging
     LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, hidden Deleted ones, thumbnail cache
+    UsageTracker.swift            @MainActor Usage line: storage and credits hourly, counts every 5 minutes or after this Mac's Upload/Delete, the Link History's rate-limit pause
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete
     KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL
     LoginItem.swift               SMAppService.mainApp; registers once on first launch (on by default)
@@ -115,6 +118,13 @@ Makefile                          Build, bundle, sign, install, and the test wra
 3. A successful fetch replaces the fetched list. `HistorySearch.stillUnconfirmed` keeps this Mac's own Uploads that search doesn't list yet, for up to 2 minutes after the Upload.
 4. Image rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), cached in memory by public_id and pruned to what's shown.
 5. Saving new credentials calls `LinkHistory.reset()`, which clears everything and refetches.
+
+### How the Usage line refreshes
+
+1. `UsageTracker.refresh()` runs at launch and from `menuNeedsUpdate`, next to the Link History's. It skips everything while `LinkHistory.isPaused`, and a rate limit it hits itself calls `LinkHistory.pause(until:)`: one key, one limit.
+2. Storage and credits (`GET /usage`, one call) are due an hour after the last answer; Cloudinary only updates them daily. The counts (two searches) are due 5 minutes after the last answer, or sooner when the last answer started less than 15 s after this Mac's latest Upload or Delete. After a failure, either waits at least 30 s.
+3. A success replaces that half; a 403 clears it, which hides the line until the next interval; anything else keeps the last values and is only logged. The line shows only when all four values are known.
+4. An open menu is rebuilt only when the line's text changes. Saving new credentials calls `UsageTracker.reset()`.
 
 ### How a Delete flows
 
@@ -162,6 +172,12 @@ These are decisions the user made during design. Changing any of them needs thei
   - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
+- **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
+  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, starts at the thumbnails' 14 pt edge, and never highlights.
+  - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
+  - The Free plan has **no storage limit**: storage, bandwidth and transformations share 25 credits a month. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left.
+  - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
+  - No tooltip, no "Loading…", never the Last Error. Hidden until every value is known.
 - **Quit is immediate**, with no confirmation while uploads are running.
 - **No notifications and no sounds.** Feedback is the icon only.
 
@@ -220,6 +236,11 @@ After `verify` passes and the key is saved, the settings window runs one search 
 - **Search is eventually consistent:** a new asset can take a few seconds to show up. That's why `LinkHistory` keeps unconfirmed entries.
 - Each thumbnail costs one transformation per image, once; repeat requests are free.
 
+**Usage**
+- `GET /v1_1/<cloud>/usage` with Basic auth: `storage.usage` (bytes) and `credits.used_percent`. It's updated once a day (`last_updated`).
+- Counts: `POST /resources/search` with `expression=resource_type:image` (then `video`) and `max_results=0`, reading `total_count`. The Free plan doesn't support `aggregate`, so this is the cheapest way.
+- All three are Admin API calls on the shared 500-an-hour budget: at most about 25 an hour from this line.
+
 **Errors**
 - `UploadError.cloudinary(message)` carries Cloudinary's `error.message`, plus `(HTTP n)`.
 - A 403 becomes `UploadError.notAllowedToUpload(cloudinaryMessage:)`. The menu shows the readable "isn't allowed to upload" message, and its `description` (what the log prints) adds Cloudinary's own message.
@@ -248,7 +269,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, and Deletes (the destroy request and its signing and encoding, reading the answer).
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), and Deletes (the destroy request and its signing and encoding, reading the answer).
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.

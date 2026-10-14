@@ -94,6 +94,7 @@ Click the icon to see:
 | Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
+| `1,210 images · 26 videos · 636 MB · 12% of credits` | Your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and how much of the month's 25 credits are used. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits, so the percentage is what's left. Cloudinary updates storage and credits once a day. Hidden until the first fetch works, or if the key can't read it |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Launch at Login | Start CloudDrop when you log in |
 | Quit CloudDrop | Quits immediately. Any running uploads stop, and unfinished Captures are saved to Downloads |
@@ -217,7 +218,7 @@ Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30):
 | Memory, idle | about 16 MB after launch, including the first Link History fetch; about 30 MB after some use (opening the menu with its thumbnails, an upload) |
 | CPU, idle | 0.0%, with about 5 threads and no timers or polling; about 0.03 s of CPU a minute and 10–16 idle wakeups a minute |
 | Energy, idle | 0.0 in `top`'s power column, so it doesn't keep the Mac awake |
-| Network, idle | none. One search when it launches, then at most one every 30 seconds, and only when you open the menu. Each thumbnail is about 1 KB. A Delete is one request, and doesn't count toward the hourly limit |
+| Network, idle | none. At launch, one search for the Link History and three calls for the Usage line. After that, only when you open the menu: at most one Link History search every 30 seconds, the two Usage counts at most every 5 minutes (sooner after an upload or Delete), and the Usage storage and credits at most hourly. Each thumbnail is about 1 KB. A Delete is one request, and doesn't count toward the hourly limit |
 | Upload of a 75 MB video | about 1 second of CPU in total, peak memory about 17 MB (measured 2026-09-28) |
 
 The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file size. Upload time depends on your connection: 75 MB took about 70 seconds over Wi-Fi.
@@ -241,9 +242,9 @@ make clean
 Sources/
   CloudDropCore/   Pure logic, unit-tested: Cloudinary URL parsing, naming,
                    signing, size limits, Share Links, the upload request,
-                   the Link History search, Deletes, temporary file and Capture handling
+                   the Link History search, Deletes, Usage, temporary file and Capture handling
   CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
-                   Link History, menu, settings window, Keychain, Launch at Login
+                   Link History, Usage line, menu, settings window, Keychain, Launch at Login
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
 CONTEXT.md         Glossary: Drop, Media File, Capture, Size Limit, Upload, Share Link, …
@@ -308,6 +309,10 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Deleting a video row works the same way.
 - [ ] Deleting a row the other Mac already deleted still flashes ✓ and removes the row.
 - [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
+- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, starts in line with the thumbnails, has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
+- [ ] After an upload, the image or video count goes up by one at the next menu open after about 15 seconds. After a Delete, it goes down.
+- [ ] With the menu open when the Usage line first arrives, it appears in place and the highlight stays on the same row.
+- [ ] With Wi-Fi off, the Usage line keeps its last values and shows no error.
 - [ ] Deleting while a queue of uploads is running doesn't stop or reorder the uploads.
 - [ ] Turning Wi-Fi off mid-upload ends with ✗ and a network error, and the next queued file is still tried.
 - [ ] Launch at Login toggles and survives a restart.

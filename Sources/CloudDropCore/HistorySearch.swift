@@ -94,18 +94,27 @@ public struct HistorySearch: Sendable {
     }
 
     static func request(credentials: CloudinaryCredentials, limit: Int) -> URLRequest {
-        var request = URLRequest(url: URL(string: "https://api.cloudinary.com/v1_1/\(credentials.cloudName)/resources/search")!)
-        request.httpMethod = "POST"
-        let auth = Data("\(credentials.apiKey):\(credentials.apiSecret)".utf8).base64EncodedString()
-        request.setValue("Basic \(auth)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
+        searchRequest(credentials: credentials, body: [
             "expression": "asset_folder=\(PublicID.assetFolder)",
             "sort_by": [["created_at": "desc"]],
             "max_results": limit,
             "fields": ["public_id", "format", "resource_type", "created_at", "display_name", "bytes"],
-        ]
+        ])
+    }
+
+    /// A Search API call with Basic auth. The Usage line's counts use it too.
+    static func searchRequest(credentials: CloudinaryCredentials, body: [String: Any]) -> URLRequest {
+        var request = adminRequest(credentials: credentials, path: "resources/search")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)
+        return request
+    }
+
+    static func adminRequest(credentials: CloudinaryCredentials, path: String) -> URLRequest {
+        var request = URLRequest(url: URL(string: "https://api.cloudinary.com/v1_1/\(credentials.cloudName)/\(path)")!)
+        let auth = Data("\(credentials.apiKey):\(credentials.apiSecret)".utf8).base64EncodedString()
+        request.setValue("Basic \(auth)", forHTTPHeaderField: "Authorization")
         return request
     }
 
@@ -116,15 +125,22 @@ public struct HistorySearch: Sendable {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             guard let resources = json?["resources"] as? [[String: Any]] else { throw HistoryFetchError.unexpectedResponse(status) }
             return resources.compactMap { entry(from: $0, cloudName: cloudName) }
-        case 420, 429:
-            throw HistoryFetchError.rateLimited(until: rateLimitReset.flatMap(httpDate))
-        case 401:
-            throw HistoryFetchError.cloudinary("Cloudinary rejected the API key or secret")
-        case 403:
-            throw HistoryFetchError.notAllowedToList(cloudinaryMessage: Uploader.errorMessage(in: data))
         default:
-            if let message = Uploader.errorMessage(in: data) { throw HistoryFetchError.cloudinary("\(message) (HTTP \(status))") }
-            throw HistoryFetchError.unexpectedResponse(status)
+            throw failure(status: status, data: data, rateLimitReset: rateLimitReset)
+        }
+    }
+
+    /// What a non-200 answer from the Admin API means. The Usage line's calls share it.
+    static func failure(status: Int, data: Data, rateLimitReset: String?) -> HistoryFetchError {
+        switch status {
+        case 420, 429:
+            .rateLimited(until: rateLimitReset.flatMap(httpDate))
+        case 401:
+            .cloudinary("Cloudinary rejected the API key or secret")
+        case 403:
+            .notAllowedToList(cloudinaryMessage: Uploader.errorMessage(in: data))
+        default:
+            Uploader.errorMessage(in: data).map { .cloudinary("\($0) (HTTP \(status))") } ?? .unexpectedResponse(status)
         }
     }
 

@@ -10,11 +10,13 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let queue = UploadQueue()
     private let history = LinkHistory()
+    private let usage = UsageTracker()
     private let menu = NSMenu()
     private let promiseQueue = OperationQueue()
     private lazy var settings = SettingsWindowController { [weak self] saved in
         self?.storedCredentials = .success(saved)
         self?.history.reset()
+        self?.usage.reset()
     }
 
     /// Nil until the Keychain has been read. A success holds nil when no Cloudinary URL is saved.
@@ -25,6 +27,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private var isMenuOpen = false
     /// What the open menu's Link History section shows, to tell a real change from a thumbnail arriving.
     private var shownHistory: [String] = []
+    private var shownUsage: String?
     private var rowViews: [String: HistoryRowView] = [:]
     /// Survives a rebuild of the open menu, so the highlight stays on the same entry.
     private var highlightedLink: URL?
@@ -45,13 +48,24 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             return try self.credentials()
         }
         queue.onEvent = { [weak self] event in self?.handle(event) }
-        queue.onUploaded = { [weak self] entry, thumbnail in self?.history.add(entry, thumbnail: thumbnail) }
-        queue.onDeleted = { [weak self] entry in self?.history.remove(entry) }
+        queue.onUploaded = { [weak self] entry, thumbnail in
+            self?.history.add(entry, thumbnail: thumbnail)
+            self?.usage.countsChanged()
+        }
+        queue.onDeleted = { [weak self] entry in
+            self?.history.remove(entry)
+            self?.usage.countsChanged()
+        }
         history.credentials = { [weak self] in try? self?.credentials() }
         history.onChange = { [weak self] in self?.historyChanged() }
+        usage.credentials = { [weak self] in try? self?.credentials() }
+        usage.isPaused = { [weak self] in self?.history.isPaused ?? false }
+        usage.onRateLimited = { [weak self] until in self?.history.pause(until: until) }
+        usage.onChange = { [weak self] in self?.usageChanged() }
         render()
-        // So the first click already shows the Link History.
+        // So the first click already shows the Link History and the Usage line.
         history.refresh()
+        usage.refresh()
     }
 
     // MARK: Credentials
@@ -104,7 +118,10 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
         if case .failure = storedCredentials {
             readCredentials()
-            if case .success = storedCredentials { history.refresh() }
+            if case .success = storedCredentials {
+                history.refresh()
+                usage.refresh()
+            }
         }
         do throws(CredentialsError) {
             _ = try credentials()
@@ -215,6 +232,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     func menuNeedsUpdate(_ menu: NSMenu) {
         // Shows what's already known now; a fresh list replaces it in place when it arrives.
         history.refresh()
+        usage.refresh()
         buildMenu()
     }
 
@@ -231,15 +249,21 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     /// so rows don't shift under the pointer for nothing.
     private func historyChanged() {
         guard isMenuOpen else { return }
-        guard historySection() == shownHistory else {
-            buildMenu()
-            for item in menu.items {
-                (item.view as? HistoryRowView)?.isHighlighted = item.representedObject as? URL == highlightedLink
-            }
-            return
-        }
+        guard historySection() == shownHistory else { return rebuildOpenMenu() }
         for entry in history.entries {
             if let image = history.thumbnail(for: entry) { rowViews[entry.publicID]?.setThumbnail(image) }
+        }
+    }
+
+    private func usageChanged() {
+        guard isMenuOpen, usage.usage.line != shownUsage else { return }
+        rebuildOpenMenu()
+    }
+
+    private func rebuildOpenMenu() {
+        buildMenu()
+        for item in menu.items {
+            (item.view as? HistoryRowView)?.isHighlighted = item.representedObject as? URL == highlightedLink
         }
     }
 
@@ -260,6 +284,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         menu.removeAllItems()
         rowViews = [:]
         shownHistory = historySection()
+        shownUsage = usage.usage.line
 
         if let error = queue.lastError {
             let item = NSMenuItem(title: "⚠︎ " + MenuText.truncateMiddle(error, maxLength: 60), action: nil, keyEquivalent: "")
@@ -324,6 +349,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        if let line = shownUsage {
+            let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+            item.view = UsageRowView(line: line)
+            item.isEnabled = false
+            menu.addItem(item)
+        }
 
         let settingsItem = NSMenuItem(title: "Set Cloudinary URL…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self

@@ -11,4 +11,6 @@ CloudDrop does one thing: it turns image and video files dropped on its icon int
 - retrying failed Uploads
 - asking for confirmation before quitting mid-queue
 
+The menu's one-line Usage summary (counts, storage, credits) is in scope, though: it is read-only and cheap on the hourly API limit.
+
 Before adding any of these, revisit this decision.

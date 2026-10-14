@@ -42,6 +42,17 @@ final class LinkHistory {
         return problem
     }
 
+    /// True while a rate limit is in force. The Usage line's calls count toward the same limit.
+    var isPaused: Bool {
+        if case .paused = currentProblem { true } else { false }
+    }
+
+    /// Pauses refreshes after another caller on the same key hit the rate limit.
+    func pause(until: Date?) {
+        problem = .paused(until: until ?? Date().addingTimeInterval(Self.defaultPause))
+        onChange()
+    }
+
     func thumbnail(for entry: HistoryEntry) -> NSImage? {
         thumbnails[entry.publicID]
     }

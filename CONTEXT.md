@@ -44,6 +44,10 @@ _Avoid_: Recents, log
 Permanently removing an uploaded Media File from Cloudinary, chosen from its Link History entry after a confirmation. Its Share Link stops working within minutes, and it cannot be undone.
 _Avoid_: Remove, destroy, trash
 
+**Usage**:
+The whole account's image and video counts, its stored bytes, and the share of the monthly credit allowance used, as Cloudinary reports them. It covers every file in the account, not only CloudDrop's Uploads. The Free plan has no storage limit of its own, so the credit share is the only measure of what's left.
+_Avoid_: Quota, stats, storage, account info
+
 **Last Error**:
 The most recent failure message (a refused file, a failed Upload or Delete, Captures saved to Downloads, or a Cloudinary URL that couldn't be read), shown in the menu. It clears when the next Drop or Delete begins.
 _Avoid_: Error log

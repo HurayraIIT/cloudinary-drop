@@ -442,6 +442,11 @@ import UniformTypeIdentifiers
         (10_485_760, "10 MB"),
         (91_226_112, "87 MB"),
         (104_857_600, "100 MB"),
+        (666_508_855, "636 MB"),
+        (1_047_527_424, "999 MB"),
+        (1_048_576_000, "1.0 GB"),
+        (1_395_864_371, "1.3 GB"),
+        (26_843_545_600, "25.0 GB"),
     ])
     func fileSizesUseTheSizeLimitsUnits(_ bytes: Int64, _ label: String) {
         #expect(MenuText.fileSize(bytes) == label)
@@ -564,6 +569,93 @@ import UniformTypeIdentifiers
         #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 205)) == deleted)
         #expect(HistorySearch.stillDeleted(deleted, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 205)).isEmpty)
         #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
+    }
+}
+
+@Suite struct UsageLine {
+    private let credentials = CloudinaryCredentials(apiKey: "123", apiSecret: "abc", cloudName: "djasqoair")
+
+    @Test func showsCountsStorageAndCredits() {
+        let usage = Usage(storedBytes: 666_508_855, creditsUsedPercent: 12.16, images: 1210, videos: 26)
+        #expect(usage.line == "1,210 images · 26 videos · 636 MB · 12% of credits")
+    }
+
+    @Test func isHiddenUntilEverythingIsKnown() {
+        #expect(Usage().line == nil)
+        #expect(Usage(storedBytes: 1, creditsUsedPercent: 1, images: 1).line == nil)
+        #expect(Usage(images: 1, videos: 1).line == nil)
+    }
+
+    @Test(arguments: [(0.0, "0%"), (0.3, "<1%"), (0.5, "1%"), (12.16, "12%"), (99.6, "100%")])
+    func creditsAreAWholePercent(_ value: Double, _ label: String) {
+        #expect(Usage.percent(value) == label)
+    }
+
+    @Test func singularCounts() {
+        #expect(Usage(storedBytes: 2048, creditsUsedPercent: 0, images: 1, videos: 0).line == "1 image · 0 videos · 2 KB · 0% of credits")
+    }
+
+    @Test func readsTheUsageAPI() throws {
+        let request = UsageReader.storageRequest(credentials: credentials)
+        #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/usage")
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic MTIzOmFiYw==")
+        let json = #"{"plan":"Free","storage":{"usage":666508855,"credits_usage":0.62},"credits":{"usage":3.04,"limit":25.0,"used_percent":12.16}}"#
+        let usage = try UsageReader.storage(status: 200, data: Data(json.utf8), rateLimitReset: nil)
+        #expect(usage == Usage(storedBytes: 666_508_855, creditsUsedPercent: 12.16))
+        #expect(throws: HistoryFetchError.unexpectedResponse(200)) {
+            try UsageReader.storage(status: 200, data: Data(#"{"storage":{"usage":1}}"#.utf8), rateLimitReset: nil)
+        }
+    }
+
+    @Test(arguments: [MediaKind.image, .video])
+    func countsTheWholeAccountWithoutListing(_ kind: MediaKind) throws {
+        let request = UsageReader.countRequest(credentials: credentials, kind: kind)
+        #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/resources/search")
+        #expect(request.httpMethod == "POST")
+        let data = try #require(request.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["expression"] as? String == "resource_type:\(kind.rawValue)")
+        #expect(body["max_results"] as? Int == 0)
+        #expect(try UsageReader.count(status: 200, data: Data(#"{"total_count":26,"resources":[]}"#.utf8), rateLimitReset: nil) == 26)
+    }
+
+    @Test func scheduleWaitsForItsIntervalAndRetriesNoSoonerThan30Seconds() {
+        let start = Date(timeIntervalSince1970: 1000)
+        var schedule = UsageSchedule(interval: 300)
+        #expect(schedule.isDue(at: start))
+        schedule.lastTry = start
+        schedule.isFetching = true
+        #expect(!schedule.isDue(at: start.addingTimeInterval(60)))
+        schedule.isFetching = false
+        // A failure: tried, no answer.
+        #expect(!schedule.isDue(at: start.addingTimeInterval(29)))
+        #expect(schedule.isDue(at: start.addingTimeInterval(30)))
+        schedule.lastAnswer = start
+        #expect(!schedule.isDue(at: start.addingTimeInterval(299)))
+        #expect(schedule.isDue(at: start.addingTimeInterval(300)))
+    }
+
+    @Test func countsAreDueAgainUntilAnAnswerStartsAfterSearchCaughtUp() {
+        let upload = Date(timeIntervalSince1970: 1000)
+        var schedule = UsageSchedule(interval: 300)
+        schedule.lastTry = upload.addingTimeInterval(3)
+        schedule.lastAnswer = upload.addingTimeInterval(3)
+        #expect(!schedule.isDue(at: upload.addingTimeInterval(20), changedAt: upload))
+        #expect(schedule.isDue(at: upload.addingTimeInterval(33), changedAt: upload))
+        schedule.lastTry = upload.addingTimeInterval(33)
+        schedule.lastAnswer = upload.addingTimeInterval(33)
+        #expect(!schedule.isDue(at: upload.addingTimeInterval(100), changedAt: upload))
+    }
+
+    @Test func failuresMatchTheLinkHistorys() {
+        let reset = "Wed, 30 Sep 2026 07:00:00 GMT"
+        #expect(throws: HistoryFetchError.rateLimited(until: HistorySearch.httpDate(reset))) {
+            try UsageReader.count(status: 420, data: Data(), rateLimitReset: reset)
+        }
+        #expect(throws: HistoryFetchError.notAllowedToList(cloudinaryMessage: "nope")) {
+            try UsageReader.storage(status: 403, data: Data(#"{"error":{"message":"nope"}}"#.utf8), rateLimitReset: nil)
+        }
     }
 }
 
