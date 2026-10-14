@@ -351,7 +351,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         menu.addItem(.separator())
         if let line = shownUsage {
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            item.view = UsageRowView(line: line)
+            item.view = UsageRowView(line: line, hasStateColumn: LoginItem.isEnabled)
             item.isEnabled = false
             menu.addItem(item)
         }

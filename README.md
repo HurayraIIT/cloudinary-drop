@@ -309,7 +309,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Deleting a video row works the same way.
 - [ ] Deleting a row the other Mac already deleted still flashes ✓ and removes the row.
 - [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
-- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, starts in line with the thumbnails, has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
+- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
 - [ ] After an upload, the image or video count goes up by one at the next menu open after about 15 seconds. After a Delete, it goes down.
 - [ ] With the menu open when the Usage line first arrives, it appears in place and the highlight stays on the same row.
 - [ ] With Wi-Fi off, the Usage line keeps its last values and shows no error.

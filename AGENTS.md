@@ -173,7 +173,7 @@ These are decisions the user made during design. Changing any of them needs thei
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
 - **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
-  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, starts at the thumbnails' 14 pt edge, and never highlights.
+  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Launch at Login), and never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
   - The Free plan has **no storage limit**: storage, bandwidth and transformations share 25 credits a month. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left.
   - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
