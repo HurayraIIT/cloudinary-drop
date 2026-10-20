@@ -138,7 +138,7 @@ Screen Recording 2026-09-28 at 14.15.03.mov
 - The random name makes links hard to guess. CloudDrop never replaces an existing file. If a name is somehow already taken, that Upload fails with "Its random name was already taken, drop it again", and the old link keeps its file.
 - Links made before this change (`…/clouddrop/260928_…`) keep working.
 
-**What the link points to:** the Share Link is the original file, byte for byte. The one exception is **HEIC photos**, which get a `.jpg` link so they display in every browser. Cloudinary converts them when the link is first opened.
+**What the link points to:** exactly the file that was uploaded. That's the original file, byte for byte, with two exceptions. A **compressed video** links to its compressed `.mp4`. **HEIC photos** get a `.jpg` link so they display in every browser; Cloudinary converts them when the link is first opened.
 
 ### Deleting an upload
 

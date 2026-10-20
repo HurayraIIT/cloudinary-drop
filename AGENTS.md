@@ -6,7 +6,7 @@ This is a guide for AI coding agents working on CloudDrop. Read it before changi
 
 CloudDrop is a **personal** macOS menu bar app. The user drops image or video files on its menu bar icon, and each one is uploaded to Cloudinary. The resulting public link opens in the default browser and is copied to the clipboard.
 
-- It has one user, one Cloudinary account and two Macs (M1 Air and M4 Pro), all on macOS 26.
+- It has one user, one Cloudinary account and two Macs, both on macOS 26. The **M1 MacBook Air (8 GB, fanless) is the main one**; the M4 Pro is an office Mac being returned. Tune anything CPU-, heat- or memory-sensitive for the Air.
 - It is never distributed, notarized or put on the App Store.
 - It is deliberately minimal, and resisting feature creep is part of the job (see [ADR 0004](docs/adr/0004-scope-boundaries.md)).
 
@@ -14,7 +14,7 @@ CloudDrop is a **personal** macOS menu bar app. The user drops image or video fi
 
 | File | Why |
 |---|---|
-| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Size Limit, Upload, Upload Queue, Share Link, Link History, Delete, Usage, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
+| [CONTEXT.md](CONTEXT.md) | **The glossary.** Drop, Media File, Capture, Size Limit, Compression, Quality Level, Upload, Upload Queue, Share Link, Link History, Delete, Usage, Last Error, Cloudinary URL. Use these exact terms in code, comments, UI text and commits, and avoid the synonyms it lists under *Avoid* |
 | [docs/adr/](docs/adr/) | **Why things are the way they are.** Don't "fix" anything an ADR explains without discussing it with the user first |
 | [README.md](README.md) | Behaviour as the user sees it, plus the manual test checklist |
 
@@ -26,6 +26,7 @@ The ADRs:
 - **0005:** short Share Links: random `d/<8 chars>` names, links built from the public_id (root path for images, no version), and uploads that never overwrite.
 - **0006:** the Link History is fetched from Cloudinary's Search API, so both Macs show the same list; Cloudinary-made image thumbnails are the one transformation outside HEIC→JPG.
 - **0007:** Delete from a Link History row: the signed `destroy` with `invalidate=true`, an alert with Cancel as default, Deleted assets hidden locally while search catches up.
+- **0008:** videos are compressed on the Mac with the user's Homebrew ffmpeg (libx264) before uploading, and the Size Limit is checked afterwards. The menu has a Compress Videos toggle and three Quality Levels (CRF 22/24/26). Apple's encoder, slower presets, native resolution and retrying at lower quality were rejected.
 
 `CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0008-…`) and keep it to a paragraph or two.
 
@@ -140,7 +141,17 @@ These are decisions the user made during design. Changing any of them needs thei
 **Uploads**
 - **Sequential uploads.** One at a time, in drop order. A new Drop joins the end of the queue, and a failed Upload never stops the rest.
 - **Every successful Upload opens the Share Link in the browser *and* copies it.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
-- **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading. There's no transcoding or downscaling, and no chunked uploads (100 MB is already the plan's per-file maximum).
+- **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading: on the original for images and for videos when Compression is off or ffmpeg is missing, and on the compressed file otherwise. Images are never transcoded or downscaled. There are no chunked uploads (100 MB is already the plan's per-file maximum).
+- **Compression** ([ADR 0008](docs/adr/0008-compress-videos-before-upload.md)):
+  - ffmpeg is the user's Homebrew one, looked up at `/opt/homebrew/bin/ffmpeg` (a GUI app doesn't get the shell's PATH). It's never bundled or installed by the app. It's looked up when the menu opens and before each compression.
+  - The pipeline is fixed: VideoToolbox decode, `scale_vt` only to fit within 1920×1920 (keep aspect, round down to even), libx264 `veryfast`, `-threads 2`, ≤ 30 fps, AAC 96 kbps, MP4 with `+faststart`. Only the CRF changes, from the Quality Level.
+  - The toggle and Quality Level are per Mac (UserDefaults), on and CRF 22 by default, and **read at Drop time**: changing them never affects a video already dropped.
+  - Every video is compressed when it's on, and the compressed file is uploaded **even if it's bigger** than the original. Its `display_name` ends in `.mp4` to match its Share Link.
+  - While compressing, the icon is `arrow.down.right.and.arrow.up.left` with ` NN%` (ffmpeg's progress against the video's length), then the usual uploading icon.
+  - No retry at a lower Quality Level, and no pausing for heat. Over the limit after compressing → refused (`rec.mov is still 120 MB compressed, video limit is 100 MB.`, plus `Try CRF 26.` below CRF 26), and saved to Downloads: a Capture as `cd-rec (original).mov` and `cd-rec (compressed).mp4`, a Finder file as `cd-rec (compressed).mp4` only.
+  - ffmpeg fails (including sources the M1 can't hardware-decode, such as AV1 or VP9): the original is uploaded if it fits, with the Last Error `Couldn't compress rec.mov, uploaded it as is`; otherwise it's refused as usual. There's no software-decoding fallback.
+  - A video refused for size without compressing ends its message with `Install ffmpeg to compress it.` (no ffmpeg) or `Turn on Compress Videos to fit it.` (off).
+  - Quitting stops ffmpeg and deletes its partial output; the launch and quit sweep removes any left behind. Original files are never modified.
 - **A user's files are never moved or deleted.** Only Captures and files received from a file promise are. `TemporaryFiles.isCapture` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-captures/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
 - **A Capture is never lost.** It's the only copy, so whenever it won't be uploaded (refused, failed, no Cloudinary URL, or CloudDrop quits or crashes first) it's saved to Downloads, and the Last Error says so. Captures saved by the cleanup at quit are counted in the `capturesSavedAtQuit` UserDefaults key, and the next launch reports them with those found at launch: "Saved 2 unfinished Captures to Downloads", with a ✗ flash. Files received from a file promise are never saved: their original still exists.
 - **Accepted types:** `UTType` conforming to `.image` → image, `.movie` → video. Everything else is refused.
@@ -152,6 +163,7 @@ These are decisions the user made during design. Changing any of them needs thei
   - videos: `https://res.cloudinary.com/<cloud>/video/upload/d/<name>.<format>`, because the root path form 404s for videos
   - there's never a version segment
   - `.heic`/`.heif` become `.jpg`
+  - Videos uploaded after Compression are `.mp4`, so their Share Links are too.
   - Don't add `f_auto`, `q_auto` or other transformations. The Link History's thumbnail URLs are the only other transformation, and they're never a Share Link ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)).
 - **Uploads never overwrite.** They're sent with `overwrite=false`. On a taken name, Cloudinary answers **200** describing the *old* file with `"existing": true`, and `Uploader.uploadedFile` turns that into `UploadError.nameTaken`. Without this check, the new Upload would get the old file's link. Leaving the version out is only safe because of this: a default overwrite serves the new bytes even at the old versioned URL.
 
@@ -164,7 +176,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - **Each entry is a `HistoryRowView`** in a fixed 420 pt menu: one 30 pt line of `[thumbnail] filename … size time [Copy] [Open]`, with the Share Link, the full date and time, and the size as the tooltip.
   - The filename is `display_name`, or the public_id's last part when that's empty.
   - The time is `HistoryTime.label`: the 12-hour `02:34 PM` today (`HistoryTime.clock`, also used by the tooltip and the paused line), `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
-  - The size is Cloudinary's `bytes`: the Media File as dropped, so a HEIC shows the HEIC's size, not the JPEG its Share Link delivers. This Mac's unconfirmed Uploads take it from the upload response. `MenuText.fileSize` uses the Size Limit messages' binary units: `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`. An unknown size leaves the cell blank, never `0 KB`.
+  - The size is Cloudinary's `bytes`: what was uploaded, so a compressed video shows the compressed size, and a HEIC shows the HEIC's size, not the JPEG its Share Link delivers. This Mac's unconfirmed Uploads take it from the upload response. `MenuText.fileSize` uses the Size Limit messages' binary units: `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`. An unknown size leaves the cell blank, never `0 KB`.
   - The size and time are right-aligned columns in grey monospaced digits. Each is as wide as its widest label in the menu, so every row lines up; there's no `·` separator.
   - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
   - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
@@ -172,7 +184,10 @@ These are decisions the user made during design. Changing any of them needs thei
   - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
-- **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
+- **The compression section** sits between the Link History and the Usage line, with a separator above and below. It uses native items, like Launch at Login:
+  - `Compress Videos` with a checkmark, then three indented checkmark items, shown only while it's on: `CRF 22 · Best quality`, `CRF 24`, `CRF 26 · Smallest files`.
+  - Without ffmpeg, `Compress Videos` is disabled and unchecked (whatever is saved), with a grey `Please install ffmpeg` line below it and no Quality Levels.
+- **The Usage line** is one 30 pt `UsageRowView` after the separator under the compression section, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
   - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Launch at Login), and never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
   - The Free plan has **no storage limit**: storage, bandwidth and transformations share 25 credits a month. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left.
@@ -311,7 +326,7 @@ The app's Last Error text is only in memory. **Ask the user to read the ⚠︎ l
 
 Don't add any of these unless the user explicitly asks, and then revisit ADR 0004:
 - renaming uploads (deleting is in scope since [ADR 0007](docs/adr/0007-delete-from-the-link-history.md))
-- Cloudinary transformations (beyond HEIC → JPG and the Link History's thumbnails)
+- Cloudinary transformations (beyond HEIC → JPG and the Link History's thumbnails). Compressing videos on the Mac is in scope ([ADR 0008](docs/adr/0008-compress-videos-before-upload.md))
 - other cloud services
 - Link History written to disk
 - clipboard images, browser-drag support, non-media files
@@ -320,7 +335,7 @@ Don't add any of these unless the user explicitly asks, and then revisit ADR 000
 - retries
 - a quit confirmation
 - notifications and sounds
-- a settings UI beyond the one field
+- a settings UI beyond the one field, Launch at Login, and the compression section
 
 ## Security and privacy rules
 
