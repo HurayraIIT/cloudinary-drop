@@ -6,6 +6,7 @@ public enum TemporaryFiles: Sendable {
     static let prefix = "clouddrop-"
     static let dropsFolderName = "clouddrop-drops"
     static let capturesFolderName = "clouddrop-captures"
+    static let compressedFolderName = "clouddrop-compressed"
 
     /// Where one Upload's multipart body is written before it is sent.
     public static func multipartBody(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
@@ -23,6 +24,11 @@ public enum TemporaryFiles: Sendable {
         directory.appendingPathComponent("\(capturesFolderName)/\(UUID().uuidString)", isDirectory: true)
     }
 
+    /// Where ffmpeg writes one compressed video. The folder is created by the caller.
+    public static func compressedVideo(in directory: URL = FileManager.default.temporaryDirectory) -> URL {
+        directory.appendingPathComponent("\(compressedFolderName)/\(UUID().uuidString).mp4")
+    }
+
     /// Whether a dropped file is a Capture: still in the `TemporaryItems` folder floating screenshot and
     /// screen recording thumbnails hand over, or already moved into a capture folder. A file the user
     /// dragged from `/tmp` or anywhere else in Finder is theirs and never counts.
@@ -31,7 +37,8 @@ public enum TemporaryFiles: Sendable {
         return path.contains("/TemporaryItems/") || path.contains("/\(capturesFolderName)/")
     }
 
-    /// Removes multipart bodies and received Drop files, and saves any Capture still waiting to Downloads.
+    /// Removes multipart bodies, received Drop files and compressed videos, and saves any Capture still waiting
+    /// to Downloads.
     /// Quitting mid-upload skips the `defer` that normally deletes a body, and a video's body can be 100 MB.
     /// Returns how many Captures were saved.
     @discardableResult
@@ -42,11 +49,11 @@ public enum TemporaryFiles: Sendable {
         var saved = 0
         for folder in (try? fileManager.contentsOfDirectory(at: captures, includingPropertiesForKeys: nil)) ?? [] {
             for file in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
-                if saveCaptureToDownloads(file, in: downloads) != nil { saved += 1 }
+                if saveToDownloads(file, in: downloads) != nil { saved += 1 }
             }
         }
         let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
-        for name in names where name == dropsFolderName || name == capturesFolderName
+        for name in names where [dropsFolderName, capturesFolderName, compressedFolderName].contains(name)
             || (name.hasPrefix(prefix) && name.hasSuffix(".multipart")) {
             try? fileManager.removeItem(at: directory.appendingPathComponent(name))
         }
@@ -74,10 +81,11 @@ public enum TemporaryFiles: Sendable {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
     }
 
-    /// Moves a Capture that won't be uploaded to Downloads as `cd-<filename>`, adding ` 2`, ` 3`… rather than
-    /// overwrite. Nil when the file is missing or can't be moved or copied.
+    /// Moves a Capture that won't be uploaded, or a compressed video that was refused, to Downloads as
+    /// `cd-<filename>`, adding ` 2`, ` 3`… rather than overwrite. Nil when the file is missing or can't be
+    /// moved or copied.
     @discardableResult
-    public static func saveCaptureToDownloads(_ sourceURL: URL, filename: String? = nil,
+    public static func saveToDownloads(_ sourceURL: URL, filename: String? = nil,
                                               in downloads: URL = downloadsFolder) -> URL? {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sourceURL.path) else { return nil }

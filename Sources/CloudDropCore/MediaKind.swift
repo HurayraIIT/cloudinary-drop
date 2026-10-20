@@ -35,6 +35,8 @@ public enum Refusal: Error, Equatable, Sendable {
     case notMedia(filename: String)
     case unreadable(filename: String)
     case tooLarge(filename: String, kind: MediaKind, byteCount: Int64)
+    /// A video still over the Size Limit after Compression. It's never compressed again at a lower Quality Level.
+    case stillTooLarge(filename: String, byteCount: Int64, quality: QualityLevel)
 
     public var message: String {
         switch self {
@@ -44,20 +46,31 @@ public enum Refusal: Error, Equatable, Sendable {
             "\(filename) couldn't be read"
         case let .tooLarge(filename, kind, byteCount):
             "\(filename) is \(megabytes(byteCount, over: kind.sizeLimit)), \(kind.rawValue) limit is \(megabytes(kind.sizeLimit))"
+        case let .stillTooLarge(filename, byteCount, quality):
+            "\(filename) is still \(megabytes(byteCount, over: MediaKind.video.sizeLimit)) compressed, video limit is "
+                + megabytes(MediaKind.video.sizeLimit) + (quality == .crf26 ? "" : ". Try CRF 26.")
         }
+    }
+
+    /// The message, plus how Compression could have fitted a video refused for its size.
+    public func message(compression: CompressionSetting) -> String {
+        guard case .tooLarge(_, .video, _) = self, let hint = compression.sizeRefusalHint else { return message }
+        return addingSentence(hint, to: message)
     }
 }
 
 /// Decides whether a dropped file is a Media File within its Size Limit.
-/// An unknown size is refused rather than let past the Size Limit.
-public func checkMediaFile(filename: String, type: UTType?, byteCount: Int64?) -> Result<MediaKind, Refusal> {
+/// An unknown size is refused rather than let past the Size Limit. A video that will be compressed is
+/// checked against the Size Limit only once it's compressed.
+public func checkMediaFile(filename: String, type: UTType?, byteCount: Int64?,
+                           compressingVideos: Bool = false) -> Result<MediaKind, Refusal> {
     guard let type, let kind = MediaKind(type: type) else {
         return .failure(.notMedia(filename: filename))
     }
     guard let byteCount else {
         return .failure(.unreadable(filename: filename))
     }
-    guard byteCount <= kind.sizeLimit else {
+    guard byteCount <= kind.sizeLimit || (kind == .video && compressingVideos) else {
         return .failure(.tooLarge(filename: filename, kind: kind, byteCount: byteCount))
     }
     return .success(kind)

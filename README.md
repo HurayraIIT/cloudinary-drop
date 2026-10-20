@@ -33,6 +33,7 @@ It's built for one person, one Cloudinary account and two Macs. It isn't distrib
 | macOS | 26 or later |
 | Tools | Command Line Tools (`xcode-select --install`). Full Xcode is **not** needed |
 | Cloudinary | An account and an API key **that is allowed to upload** (see [below](#first-time-setup)) |
+| ffmpeg | Optional, to compress videos: `brew install ffmpeg`. Without it, videos upload as they are |
 
 ## Install
 
@@ -91,9 +92,10 @@ Click the icon to see:
 | Item | What it does |
 |---|---|
 | ⚠︎ *error* | The last problem from your most recent Drop or Delete, or Captures saved to Downloads at launch. Hover for the full text. It clears when you drop or delete something new |
-| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as dropped) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
+| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as uploaded, so a compressed video shows its compressed size) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
+| Compress Videos | On by default: each video is compressed on your Mac before it's uploaded (see [Video compression](#video-compression)). While it's on, choose a Quality Level below it: **CRF 22 · Best quality** (default), **CRF 24**, or **CRF 26 · Smallest files**. Without ffmpeg it's greyed out, with "Please install ffmpeg" below it. Saved on each Mac separately |
 | `1,210 images · 26 videos · 636 MB · 12% of credits` | Your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and how much of the month's 25 credits are used. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits, so the percentage is what's left. Cloudinary updates storage and credits once a day. Hidden until the first fetch works, or if the key can't read it |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Launch at Login | Start CloudDrop when you log in |
@@ -105,6 +107,7 @@ Click the icon to see:
 |---|---|
 | ☁︎ (cloud with arrow) | Idle, ready for a Drop |
 | Highlighted | You're dragging at least one image or video over it |
+| ↘↖ `42%` | Compressing a video; the percentage is for the current file |
 | ↑ `42%` | Uploading; the percentage is for the current file |
 | ✓ | An upload finished and its link is on the clipboard, a link was copied, or a Delete finished |
 | ✗ | Something was refused or failed, or unfinished Captures were saved to Downloads at launch; open the menu to see why |
@@ -118,10 +121,30 @@ Click the icon to see:
 | Accepted | Images (PNG, JPEG, HEIC, GIF, WebP, …) and videos (MOV, MP4, …) |
 | Refused | Everything else (PDFs, zips, folders), and files whose size can't be read |
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
-| Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown |
+| Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown. While Compress Videos is on, a video's limit applies to its compressed file |
 | Captures | A screenshot or recording dropped straight from its floating thumbnail exists nowhere else. If it isn't uploaded (refused, failed, no Cloudinary URL yet, or CloudDrop quit first), it's saved to your **Downloads** folder as `cd-<name>`, and the menu says so. Other files are never moved or deleted |
 
 Files dragged from apps such as Photos or Mail arrive as file promises into their own temporary folders and are deleted after uploading; because the original still exists in the source app, they are not saved to Downloads if refused or failed. Files dragged from Finder or other folders are never moved or deleted.
+
+### Video compression
+
+Screen recordings are often bigger than the Free plan's 100 MB video limit, and Cloudinary can't shrink them. So while **Compress Videos** is on, CloudDrop compresses each video on your Mac first, using your Homebrew ffmpeg (`brew install ffmpeg`; CloudDrop never installs it). The result is an H.264 MP4 that plays in any browser:
+
+- Recordings bigger than 1920×1920 are scaled down, keeping their shape: a 2880×1800 Retina recording becomes 1920×1200. Smaller ones keep their size.
+- At most 30 frames a second, with 96 kbps audio.
+- On an M1 Air it takes about 20–30% of the recording's length and uses about one core. A 5-minute Retina recording goes from about 230 MB to about 15 MB.
+- The link ends in `.mp4`, and the recent links show the file as `<name>.mp4` with its compressed size. The original file is never changed.
+- Every video is compressed, even a small one, so every link plays in a browser.
+
+If it doesn't work out:
+
+| What happened | Result |
+|---|---|
+| Still over 100 MB after compressing | Refused with the compressed size ("Try CRF 26." if you're on a higher-quality level). The compressed file is saved to Downloads as `cd-<name> (compressed).mp4`. A Capture's original is saved too, as `cd-<name> (original).<ext>`; a file from Finder stays where it is |
+| ffmpeg failed (e.g. a format the Mac can't decode in hardware) | The original is uploaded if it's 100 MB or less, and the menu says "Couldn't compress <name>, uploaded it as is". If it's bigger, it's refused, and a Capture is saved as `cd-<name> (original).<ext>` |
+| Compress Videos is off, or ffmpeg isn't installed | Videos upload as they are. One over 100 MB is refused with a hint to turn compression on or install ffmpeg |
+
+Quitting while a video is compressing stops ffmpeg; a Capture is saved to Downloads as usual.
 
 **Where files end up:** each file gets a random 8-character name in the `d/` folder, so links are short and never reveal the original filename:
 
@@ -189,7 +212,10 @@ The key or secret is wrong, or it has been revoked. Copy the Cloudinary URL agai
 - If the icon isn't visible at all, it may be hidden behind the notch on a MacBook Pro. ⌘-drag it further left, or free up space in the menu bar.
 
 **A file was refused as too large.**
-Images must be 10 MB or less and videos 100 MB or less. Compress the file first.
+Images must be 10 MB or less and videos 100 MB or less. For videos, install ffmpeg (`brew install ffmpeg`) and keep **Compress Videos** on. If a compressed video is still too big, choose **CRF 26** and drop the original again (a Capture's is in Downloads as `cd-<name> (original)…`), or trim it.
+
+**Compress Videos is greyed out.**
+ffmpeg isn't installed at `/opt/homebrew/bin/ffmpeg`. Run `brew install ffmpeg`; the menu notices the next time it opens.
 
 **An upload from the other Mac isn't in the menu yet.**
 The list refreshes when you open the menu, but not more than once every 30 seconds, and Cloudinary can take a few seconds to list a new upload. Close the menu and open it again a little later. If the menu says "Couldn't refresh Link History", hover over that line to see why.
@@ -242,9 +268,11 @@ make clean
 Sources/
   CloudDropCore/   Pure logic, unit-tested: Cloudinary URL parsing, naming,
                    signing, size limits, Share Links, the upload request,
-                   the Link History search, Deletes, Usage, temporary file and Capture handling
+                   the Link History search, Deletes, Usage, temporary file and Capture handling,
+                   video Compression (ffmpeg arguments, progress, messages)
   CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
-                   Link History, Usage line, menu, settings window, Keychain, Launch at Login
+                   Link History, Usage line, menu, settings window, Keychain, Launch at Login,
+                   the Compress Videos setting
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
 CONTEXT.md         Glossary: Drop, Media File, Capture, Size Limit, Upload, Share Link, …
@@ -263,6 +291,7 @@ docs/adr/          Architecture decisions and what's deliberately out of scope
   - 0005: short Share Links
   - 0006: recent links fetched from Cloudinary
   - 0007: deleting from the recent links
+  - 0008: compressing videos before uploading
 
   Read these before adding features.
 
@@ -282,6 +311,14 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dropping the floating screenshot thumbnail works like a PNG.
 - [ ] A HEIC photo's link ends in `.jpg` and displays in Chrome.
 - [ ] A screen recording (`.mov`, 10–100 MB) uploads and plays in the browser.
+- [ ] With Compress Videos on, a Retina screen recording over 100 MB shows ↘↖ `n%`, then ↑ `n%`, then ✓. Its link ends in `.mp4`, plays at 1920 wide, and the recent links show `<name>.mp4` with the compressed size. The original in Finder is unchanged.
+- [ ] The menu shows Compress Videos (checked) with three indented Quality Levels between the recent links and the Usage line, separated above and below. Unchecking it hides the levels; choosing CRF 26 sticks after a relaunch.
+- [ ] Changing the Quality Level while a video is compressing doesn't affect that video or others already dropped.
+- [ ] A portrait iPhone video uploads compressed and plays upright.
+- [ ] With Compress Videos off, a 150 MB video is refused with "… Turn on Compress Videos to fit it."
+- [ ] With ffmpeg moved away (`brew unlink ffmpeg`), Compress Videos is greyed out and unchecked with "Please install ffmpeg" below it; a small video uploads as `.mov`, and a 150 MB one ends with "Install ffmpeg to compress it." `brew link ffmpeg` brings it back without relaunching.
+- [ ] A recording still over 100 MB after compressing (e.g. a long busy one) is refused with "is still … compressed … Try CRF 26." A Capture leaves `cd-<name> (original).mov` and `cd-<name> (compressed).mp4` in Downloads; a Finder file leaves only the compressed one.
+- [ ] Quitting while a video compresses leaves no `ffmpeg` process running (`pgrep ffmpeg`), and a Capture is saved to Downloads.
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
@@ -309,7 +346,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Deleting a video row works the same way.
 - [ ] Deleting a row the other Mac already deleted still flashes ✓ and removes the row.
 - [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
-- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
+- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the compression section, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
 - [ ] After an upload, the image or video count goes up by one at the next menu open after about 15 seconds. After a Delete, it goes down.
 - [ ] With the menu open when the Usage line first arrives, it appears in place and the highlight stays on the same row.
 - [ ] With Wi-Fi off, the Usage line keeps its last values and shows no error.

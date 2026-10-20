@@ -47,6 +47,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             guard let self else { throw CredentialsError.notSet }
             return try self.credentials()
         }
+        queue.compression = { VideoCompression.setting }
         queue.onEvent = { [weak self] event in self?.handle(event) }
         queue.onUploaded = { [weak self] entry, thumbnail in
             self?.history.add(entry, thumbnail: thumbnail)
@@ -89,6 +90,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         }
     }
 
+    /// Stops a running compression, at quit.
+    func stop() {
+        queue.stop()
+    }
+
     /// Captures saved to Downloads by the cleanup at the last quit or at this launch.
     func reportCapturesSaved(_ count: Int) {
         queue.refuse(TemporaryFiles.capturesSavedMessage(count: count))
@@ -127,7 +133,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             _ = try credentials()
         } catch {
             // A Capture is the only copy, so it goes to Downloads rather than vanish with the drag.
-            let saved = fileURLs.filter(TemporaryFiles.isCapture).compactMap { TemporaryFiles.saveCaptureToDownloads($0) }
+            let saved = fileURLs.filter(TemporaryFiles.isCapture).compactMap { TemporaryFiles.saveToDownloads($0) }
             let message = error.localizedDescription
             queue.refuse(saved.isEmpty ? message : TemporaryFiles.mentioningCaptureSaved(message))
             if case .notSet = error { showSettings() }
@@ -214,12 +220,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         case .success: symbol = "checkmark.circle"
         case .failure: symbol = "xmark.circle"
         case nil:
-            if let progress = queue.progress {
-                symbol = "arrow.up.circle"
-                title = " \(Int(progress * 100))%"
-            } else {
-                symbol = "icloud.and.arrow.up"
+            switch queue.activity {
+            case .compressing?: symbol = "arrow.down.right.and.arrow.up.left"
+            case .uploading?: symbol = "arrow.up.circle"
+            case nil: symbol = "icloud.and.arrow.up"
             }
+            if let percent = queue.activity?.percent { title = " \(percent)%" }
         }
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "CloudDrop")
         button.attributedTitle = NSAttributedString(
@@ -349,9 +355,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        let compression = VideoCompression.setting
+        addCompressionSection(compression)
+        menu.addItem(.separator())
         if let line = shownUsage {
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            item.view = UsageRowView(line: line, hasStateColumn: LoginItem.isEnabled)
+            item.view = UsageRowView(line: line, hasStateColumn: LoginItem.isEnabled || compression.isOn)
             item.isEnabled = false
             menu.addItem(item)
         }
@@ -367,6 +376,35 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit CloudDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    /// Compress Videos, and its Quality Levels while it's on. Without ffmpeg it's disabled and unchecked,
+    /// whatever is saved, so the saved choice comes back once ffmpeg is installed.
+    private func addCompressionSection(_ compression: CompressionSetting) {
+        let toggle = NSMenuItem(title: "Compress Videos",
+                                action: compression == .noFFmpeg ? nil : #selector(toggleCompression), keyEquivalent: "")
+        toggle.target = self
+        toggle.state = compression.isOn ? .on : .off
+        menu.addItem(toggle)
+
+        switch compression {
+        case let .on(selected):
+            for level in QualityLevel.allCases {
+                let item = NSMenuItem(title: level.menuTitle, action: #selector(chooseQualityLevel(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = level.rawValue
+                item.indentationLevel = 1
+                item.state = level == selected ? .on : .off
+                menu.addItem(item)
+            }
+        case .noFFmpeg:
+            let item = NSMenuItem(title: "Please install ffmpeg", action: nil, keyEquivalent: "")
+            item.indentationLevel = 1
+            item.isEnabled = false
+            menu.addItem(item)
+        case .off:
+            break
+        }
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
@@ -400,6 +438,15 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
     @objc private func openSettings() {
         showSettings()
+    }
+
+    @objc private func toggleCompression() {
+        VideoCompression.isEnabled.toggle()
+    }
+
+    @objc private func chooseQualityLevel(_ sender: NSMenuItem) {
+        guard let level = QualityLevel(rawValue: sender.tag) else { return }
+        VideoCompression.quality = level
     }
 
     @objc private func toggleLaunchAtLogin() {

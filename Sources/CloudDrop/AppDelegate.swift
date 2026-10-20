@@ -23,8 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Quit is immediate (ADR 0004), so an Upload in progress never gets to delete its files,
-    /// and Captures still in the Upload Queue are saved to Downloads.
+    /// and Captures still in the Upload Queue are saved to Downloads. ffmpeg is stopped first,
+    /// so it isn't left running, and its partial output is swept away.
     func applicationWillTerminate(_ notification: Notification) {
+        statusController?.stop()
         let saved = TemporaryFiles.removeLeftovers()
         guard saved > 0 else { return }
         let defaults = UserDefaults.standard

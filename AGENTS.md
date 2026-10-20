@@ -34,7 +34,7 @@ The ADRs:
 
 - **Command Line Tools only, no Xcode.** `xcodebuild` doesn't work. Never add an `.xcodeproj`, `.xcworkspace`, asset catalogs, storyboards or anything else that needs Xcode.
 - **Swift 6.x, `swift-tools-version:6.0`, Swift 6 language mode**, so strict concurrency checking is on. The platform is `.macOS("26.0")`.
-- **No third-party dependencies.** Only Apple frameworks are used: AppKit, Foundation, CryptoKit, ImageIO, Security, ServiceManagement, UniformTypeIdentifiers and OSLog. Don't add Swift packages.
+- **No third-party dependencies.** Only Apple frameworks are used: AppKit, Foundation, CryptoKit, ImageIO, Security, ServiceManagement, UniformTypeIdentifiers, OSLog and Synchronization. Don't add Swift packages. The one outside tool is the user's Homebrew ffmpeg, run as a process for video Compression, never bundled.
 - **Builds are signed ad-hoc** (`codesign --sign -`) with the identifier `com.hurayraiit.clouddrop`. Each rebuild therefore changes the code signature, and macOS asks the user again for Keychain access on the next Drop. That's expected and accepted; don't try to fix it.
 - **In zsh, `log` is a shell builtin.** Call `/usr/bin/log show …` or `/usr/bin/log stream …` explicitly.
 
@@ -73,13 +73,16 @@ Sources/
     Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
     Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
     Usage.swift                   Usage (the menu line's text), UsageSchedule (when each call is due) and UsageReader: the Usage API's stored bytes and credits, and the account-wide image and video counts
+    Compression.swift             QualityLevel, CompressionSetting (on/off/no ffmpeg), the ffmpeg path and arguments, compressed and Downloads names, CompressionProgress (reads `-progress`), the fallback messages
+    Compressor.swift              Runs ffmpeg (and ffprobe for the length) as a Process: progress, the end of stderr on failure, terminate on task cancellation
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
     HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy, Open and Delete buttons
     UsageRowView.swift            The Usage line's menu row: one label in the filenames' font and colour, never highlighted
-    UploadQueue.swift             @MainActor Upload Queue: validation, sequential uploads, Deletes (alongside, not queued), Last Error, logging
+    UploadQueue.swift             @MainActor Upload Queue: validation, sequential compressions and uploads, their fallbacks, Deletes (alongside, not queued), Last Error, logging
+    VideoCompression.swift        The Compress Videos toggle and Quality Level in UserDefaults, and the current CompressionSetting (checks for ffmpeg each time)
     LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, hidden Deleted ones, thumbnail cache
     UsageTracker.swift            @MainActor Usage line: storage and credits hourly, counts every 5 minutes or after this Mac's Upload/Delete, the Link History's rate-limit pause
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete
@@ -101,8 +104,8 @@ Makefile                          Build, bundle, sign, install, and the test wra
    - retries the Keychain read if the last one failed, then checks that credentials exist. If not, it refuses, saves any Captures in the Drop to Downloads, and opens settings when no Cloudinary URL is saved (not when the Keychain couldn't be read)
    - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own Drop folder and is deleted afterwards, whatever happened.
    - a Capture (a file URL in `…/TemporaryItems/…`, from a floating screenshot or screen recording thumbnail) is moved into its own capture folder at once, because macOS deletes it when the drag ends. It's deleted after a successful Upload; refused or failed, it's moved to `~/Downloads/cd-<name>` (`cd-<name> 2` on a clash) and the Last Error ends with "Saved to Downloads."
-4. `UploadQueue.add` runs `checkMediaFile` (type and Size Limit). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
-5. `drain()` uploads **one at a time**. For each success:
+4. `UploadQueue.add` reads the `CompressionSetting` (kept on the Job, so later menu changes don't affect it) and runs `checkMediaFile` (type and Size Limit; a video skips the Size Limit when it will be compressed). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
+5. `drain()` works **one file at a time**. A video with Compression on is first compressed into `$TMPDIR/clouddrop-compressed/<uuid>.mp4` (icon ↘↖ `NN%`), checked against the Size Limit, and that file is uploaded as `<name>.mp4`; the over-limit and ffmpeg-failure paths are in the Compression invariants below. For each successful Upload:
    - `ShareLink.make` builds the Share Link
    - it's copied to the clipboard and opened with `NSWorkspace.shared.open`
    - for an image, a thumbnail is made (off the main actor) while the file is still on disk
@@ -149,7 +152,8 @@ These are decisions the user made during design. Changing any of them needs thei
   - Every video is compressed when it's on, and the compressed file is uploaded **even if it's bigger** than the original. Its `display_name` ends in `.mp4` to match its Share Link.
   - While compressing, the icon is `arrow.down.right.and.arrow.up.left` with ` NN%` (ffmpeg's progress against the video's length), then the usual uploading icon.
   - No retry at a lower Quality Level, and no pausing for heat. Over the limit after compressing → refused (`rec.mov is still 120 MB compressed, video limit is 100 MB.`, plus `Try CRF 26.` below CRF 26), and saved to Downloads: a Capture as `cd-rec (original).mov` and `cd-rec (compressed).mp4`, a Finder file as `cd-rec (compressed).mp4` only.
-  - ffmpeg fails (including sources the M1 can't hardware-decode, such as AV1 or VP9): the original is uploaded if it fits, with the Last Error `Couldn't compress rec.mov, uploaded it as is`; otherwise it's refused as usual. There's no software-decoding fallback.
+  - ffmpeg fails (including sources the M1 can't hardware-decode, such as AV1): the original is uploaded if it fits, with the Last Error `Couldn't compress rec.mov, uploaded it as is`; otherwise it's refused as usual, ending with `Couldn't compress it.` (a Capture saved as `cd-rec (original).mov`). There's no software-decoding fallback.
+  - The scale always runs (`scale_vt` with `iw`/`ih` expressions), so an odd size that otherwise fits is still rounded down to even. `-noautorotate` is required: with GPU frames ffmpeg can't rotate, and without it a portrait phone video loses its rotation and plays sideways.
   - A video refused for size without compressing ends its message with `Install ffmpeg to compress it.` (no ffmpeg) or `Turn on Compress Videos to fit it.` (off).
   - Quitting stops ffmpeg and deletes its partial output; the launch and quit sweep removes any left behind. Original files are never modified.
 - **A user's files are never moved or deleted.** Only Captures and files received from a file promise are. `TemporaryFiles.isCapture` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-captures/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
@@ -284,10 +288,11 @@ After `verify` passes and the key is saved, the settings window runs one search 
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), and Deletes (the destroy request and its signing and encoding, reading the answer).
+- `CompressingWithFFmpeg` runs the real ffmpeg (an odd-sized test pattern, a non-video file, cancellation) and is skipped on a Mac without it.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), Deletes (the destroy request and its signing and encoding, reading the answer), and Compression (the setting, size checks and messages, names, ffmpeg arguments, progress parsing).
 
 **App target**
-- It has no unit tests. After touching `StatusController`, `UploadQueue`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
+- It has no unit tests. After touching `StatusController`, `UploadQueue`, `VideoCompression`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
 
 **Live checks against Cloudinary**
 - These are allowed, carefully. The account is the user's real one.

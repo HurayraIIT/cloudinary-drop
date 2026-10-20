@@ -1,5 +1,6 @@
 import Foundation
 import ImageIO
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import CloudDropCore
@@ -225,6 +226,160 @@ import UniformTypeIdentifiers
     }
 }
 
+@Suite struct CompressionRules {
+    @Test func settingFollowsFFmpegThenTheToggle() {
+        #expect(CompressionSetting(isFFmpegInstalled: false, isEnabled: true, quality: .crf24) == .noFFmpeg)
+        #expect(CompressionSetting(isFFmpegInstalled: true, isEnabled: false, quality: .crf24) == .off)
+        #expect(CompressionSetting(isFFmpegInstalled: true, isEnabled: true, quality: .crf24) == .on(.crf24))
+        #expect(QualityLevel.default == .crf22)
+    }
+
+    @Test func qualityLevelTitles() {
+        #expect(QualityLevel.allCases.map(\.menuTitle) == ["CRF 22 · Best quality", "CRF 24", "CRF 26 · Smallest files"])
+    }
+
+    @Test func aVideoThatWillBeCompressedIsCheckedAfterwards() {
+        #expect(checkMediaFile(filename: "rec.mov", type: .quickTimeMovie, byteCount: 240_000_000, compressingVideos: true)
+            == .success(.video))
+        // Images are never compressed, so theirs is still checked up front.
+        #expect(checkMediaFile(filename: "raw.png", type: .png, byteCount: 14_680_064, compressingVideos: true)
+            == .failure(.tooLarge(filename: "raw.png", kind: .image, byteCount: 14_680_064)))
+        #expect(checkMediaFile(filename: "rec.mov", type: .quickTimeMovie, byteCount: nil, compressingVideos: true)
+            == .failure(.unreadable(filename: "rec.mov")))
+    }
+
+    @Test func sizeRefusalsSayHowCompressionCouldHelp() {
+        let video = Refusal.tooLarge(filename: "rec.mov", kind: .video, byteCount: 262_144_000)
+        #expect(video.message(compression: .noFFmpeg) == "rec.mov is 250 MB, video limit is 100 MB. Install ffmpeg to compress it.")
+        #expect(video.message(compression: .off) == "rec.mov is 250 MB, video limit is 100 MB. Turn on Compress Videos to fit it.")
+        #expect(video.message(compression: .on(.crf22)) == video.message)
+        let image = Refusal.tooLarge(filename: "raw.png", kind: .image, byteCount: 14_680_064)
+        #expect(image.message(compression: .off) == image.message)
+        #expect(Refusal.notMedia(filename: "a.pdf").message(compression: .off) == "a.pdf isn't an image or video")
+    }
+
+    @Test func stillTooLargeSuggestsTheSmallestLevel() {
+        #expect(Refusal.stillTooLarge(filename: "rec.mov", byteCount: 125_829_120, quality: .crf22).message
+            == "rec.mov is still 120 MB compressed, video limit is 100 MB. Try CRF 26.")
+        #expect(Refusal.stillTooLarge(filename: "rec.mov", byteCount: 125_829_120, quality: .crf26).message
+            == "rec.mov is still 120 MB compressed, video limit is 100 MB")
+        #expect(TemporaryFiles.mentioningCaptureSaved(Refusal.stillTooLarge(filename: "rec.mov", byteCount: 125_829_120, quality: .crf22).message)
+            == "rec.mov is still 120 MB compressed, video limit is 100 MB. Try CRF 26. Saved to Downloads.")
+    }
+
+    @Test func failureMessages() {
+        #expect(Compression.uploadedUncompressedMessage(filename: "rec.mov") == "Couldn't compress rec.mov, uploaded it as is")
+        #expect(addingSentence(Compression.failedHint, to: Refusal.tooLarge(filename: "rec.mov", kind: .video, byteCount: 262_144_000).message)
+            == "rec.mov is 250 MB, video limit is 100 MB. Couldn't compress it.")
+    }
+
+    @Test(arguments: [("rec.mov", "rec.mp4"), ("rec.mp4", "rec.mp4"), ("a.b.MOV", "a.b.mp4"), ("noext", "noext.mp4")])
+    func compressedVideosAreNamedLikeTheirShareLink(_ filename: String, _ expected: String) {
+        #expect(Compression.compressedFilename(filename) == expected)
+    }
+
+    @Test func downloadsNamesTellTheVersionsApart() {
+        #expect(Compression.downloadsName("Screen Recording.mov", compressed: false) == "Screen Recording (original).mov")
+        #expect(Compression.downloadsName("Screen Recording.mov", compressed: true) == "Screen Recording (compressed).mp4")
+        #expect(Compression.downloadsName("noext", compressed: false) == "noext (original)")
+    }
+
+    @Test func argumentsUseTheChosenLevelAndTheFixedPipeline() {
+        let arguments = Compression.arguments(input: URL(fileURLWithPath: "/in/rec.mov"), output: URL(fileURLWithPath: "/out/x.mp4"),
+                                              quality: .crf24)
+        let joined = arguments.joined(separator: " ")
+        #expect(joined.contains("-i /in/rec.mov"))
+        #expect(arguments.last == "/out/x.mp4")
+        #expect(joined.contains("-crf 24"))
+        for expected in ["-noautorotate", "-hwaccel videotoolbox", "-c:v libx264", "-preset veryfast", "-threads 2",
+                         "-fpsmax 30", "-c:a aac -b:a 96k", "-movflags +faststart", "-progress pipe:1"] {
+            #expect(joined.contains(expected), "missing \(expected)")
+        }
+        #expect(joined.contains("scale_vt=w='trunc(iw*min(1\\,1920/max(iw\\,ih))/2)*2':h='trunc(ih*min(1\\,1920/max(iw\\,ih))/2)*2'"))
+    }
+
+    @Test func progressReadsSplitChunks() throws {
+        var progress = try #require(CompressionProgress(duration: 10))
+        #expect(progress.read("frame=10\nout_time_us=2500") == nil)
+        #expect(progress.read("000\nspeed=4x\n") == 0.25)
+        #expect(progress.read("out_time_us=N/A\nout_time_us=9000000\nout_time_us=12000000\n") == 1)
+        #expect(CompressionProgress(duration: nil) == nil)
+        #expect(CompressionProgress(duration: 0) == nil)
+    }
+}
+
+/// Runs the real ffmpeg, so only on a Mac that has it.
+@Suite(.enabled(if: Compression.isFFmpegInstalled()), .serialized) struct CompressingWithFFmpeg {
+    private func scratch() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// A test pattern of an odd size, so the result shows it was rounded down to even.
+    private func makeVideo(in directory: URL, seconds: Int, size: String = "777x1035") async throws -> URL {
+        let video = directory.appendingPathComponent("source.mov")
+        try await Compressor.run(Compression.ffmpegURL, [
+            "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=\(size):rate=60", "-t", "\(seconds)",
+            "-c:v", "libx264", "-preset", "ultrafast", video.path,
+        ]) { _ in }
+        return video
+    }
+
+    @Test func compressesToAnEvenSizedMP4() async throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try await makeVideo(in: directory, seconds: 2)
+        let output = directory.appendingPathComponent("out.mp4")
+        let reported = Recorded<Double>()
+
+        try await Compressor.compress(source, to: output, quality: .crf26) { reported.add($0) }
+
+        #expect(await Compressor.duration(of: output).map { abs($0 - 2) < 0.1 } == true)
+        let probe = Recorded<Data>()
+        try await Compressor.run(Compression.ffprobeURL, [
+            "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height,avg_frame_rate",
+            "-of", "csv=p=0", output.path,
+        ]) { probe.add($0) }
+        let description = String(decoding: probe.all.reduce(Data(), +), as: UTF8.self)
+        #expect(description.trimmingCharacters(in: .whitespacesAndNewlines) == "h264,776,1034,30/1")
+        #expect(reported.all.last.map { $0 > 0.9 } == true)
+    }
+
+    @Test func aFileThatIsntAVideoFails() async throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("fake.mov")
+        try Data("not a video".utf8).write(to: source)
+
+        await #expect(throws: CompressionError.self) {
+            try await Compressor.compress(source, to: directory.appendingPathComponent("out.mp4"), quality: .crf22) { _ in }
+        }
+    }
+
+    @Test func cancellingStopsFFmpeg() async throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = try await makeVideo(in: directory, seconds: 15, size: "2880x1800")
+        let started = Date()
+        let task = Task {
+            try await Compressor.compress(source, to: directory.appendingPathComponent("out.mp4"), quality: .crf22) { _ in }
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(Date().timeIntervalSince(started) < 5)
+    }
+}
+
+/// Collects what a pipe's background queue reports.
+private final class Recorded<Value: Sendable>: Sendable {
+    private let values = Mutex<[Value]>([])
+    var all: [Value] { values.withLock { $0 } }
+    func add(_ value: Value) { values.withLock { $0.append(value) } }
+}
+
 @Suite struct TemporaryFileCleanup {
     /// A scratch folder standing in for $TMPDIR, with a Downloads folder inside it.
     private func scratch() throws -> (directory: URL, downloads: URL) {
@@ -246,8 +401,9 @@ import UniformTypeIdentifiers
 
         let body = TemporaryFiles.multipartBody(in: directory)
         let received = TemporaryFiles.dropFolder(in: directory).appendingPathComponent("shot.png")
+        let compressed = TemporaryFiles.compressedVideo(in: directory)
         let kept = ["Downloads", "other.multipart", "clouddrop-notes.txt"]
-        for file in [body, received] + kept.dropFirst().map(directory.appendingPathComponent) {
+        for file in [body, received, compressed] + kept.dropFirst().map(directory.appendingPathComponent) {
             try write("x", to: file)
         }
 
@@ -280,7 +436,7 @@ import UniformTypeIdentifiers
         let file = folder.appendingPathComponent("recording.mov")
         try write("bytes", to: file)
 
-        let saved = TemporaryFiles.saveCaptureToDownloads(file, in: downloads)
+        let saved = TemporaryFiles.saveToDownloads(file, in: downloads)
 
         #expect(saved == downloads.appendingPathComponent("cd-recording.mov"))
         #expect(fileManager.fileExists(atPath: downloads.appendingPathComponent("cd-recording.mov").path))
@@ -297,7 +453,7 @@ import UniformTypeIdentifiers
         let file = folder.appendingPathComponent(name)
         try write("bytes", to: file)
 
-        #expect(TemporaryFiles.saveCaptureToDownloads(file, in: downloads) == downloads.appendingPathComponent("cd-\(name)"))
+        #expect(TemporaryFiles.saveToDownloads(file, in: downloads) == downloads.appendingPathComponent("cd-\(name)"))
         #expect(!fileManager.fileExists(atPath: file.path))
         // Only CloudDrop's own folders are ever removed.
         #expect(fileManager.fileExists(atPath: folder.path))
@@ -309,7 +465,7 @@ import UniformTypeIdentifiers
         let file = TemporaryFiles.captureFolder(in: directory).appendingPathComponent("cd-already.mov")
         try write("bytes", to: file)
 
-        #expect(TemporaryFiles.saveCaptureToDownloads(file, in: downloads) == downloads.appendingPathComponent("cd-already.mov"))
+        #expect(TemporaryFiles.saveToDownloads(file, in: downloads) == downloads.appendingPathComponent("cd-already.mov"))
     }
 
     @Test(arguments: [
@@ -323,7 +479,7 @@ import UniformTypeIdentifiers
         let file = TemporaryFiles.captureFolder(in: directory).appendingPathComponent(name)
         try write("new", to: file)
 
-        #expect(TemporaryFiles.saveCaptureToDownloads(file, in: downloads) == downloads.appendingPathComponent(expected))
+        #expect(TemporaryFiles.saveToDownloads(file, in: downloads) == downloads.appendingPathComponent(expected))
         for taken in existing {
             #expect(try String(contentsOf: downloads.appendingPathComponent(taken), encoding: .utf8) == "old")
         }
@@ -331,7 +487,7 @@ import UniformTypeIdentifiers
 
     @Test func missingCaptureIsNotSaved() {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("nonexistent-\(UUID().uuidString).mov")
-        #expect(TemporaryFiles.saveCaptureToDownloads(file) == nil)
+        #expect(TemporaryFiles.saveToDownloads(file) == nil)
     }
 
     @Test func removeDeletesTheFileAndItsEmptyFolderOnly() throws {
