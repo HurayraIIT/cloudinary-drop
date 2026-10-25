@@ -11,6 +11,6 @@ CloudDrop does one thing: it turns image and video files dropped on its icon int
 - retrying failed Uploads
 - asking for confirmation before quitting mid-queue
 
-The menu's one-line Usage summary (counts, storage, credits) is in scope, though: it is read-only and cheap on the hourly API limit. So are the menu's Compress Videos toggle and its Quality Levels (ADR 0008), the only settings besides the Cloudinary URL and Launch at Login.
+The menu's one-line Usage summary (counts, storage, credits) is in scope, though: it is read-only and cheap on the hourly API limit. So is the menu's Settings submenu: Open Share Links in Browser, the Compress Videos toggle and its Quality Levels (ADR 0008), and Launch at Login. Together with the Cloudinary URL, they're the only settings. Opening each Share Link stays on by default; turning it off is for a Mac where a burst of tabs gets in the way, and the clipboard is still set either way. They're grouped in a submenu so the top level stays the Link History, the Usage line, Set Cloudinary URL… and Quit.
 
 Before adding any of these, revisit this decision.

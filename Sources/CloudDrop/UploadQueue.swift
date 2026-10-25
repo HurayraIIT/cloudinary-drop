@@ -52,6 +52,8 @@ final class UploadQueue {
     var credentials: () throws -> CloudinaryCredentials = { throw CredentialsError.notSet }
     /// The menu's Compress Videos setting, and whether ffmpeg is installed.
     var compression: () -> CompressionSetting = { .off }
+    /// The Open Share Links in Browser setting, read as each Upload succeeds rather than at Drop time.
+    var opensShareLinks: () -> Bool = { true }
     /// Each successful Upload, with its thumbnail for images and the cloud it went to, for the Link History.
     var onUploaded: (HistoryEntry, NSImage?, _ cloudName: String) -> Void = { _, _, _ in }
     /// Each successful Delete, with the cloud it was in, so the Link History can hide it.
@@ -329,7 +331,7 @@ final class UploadQueue {
         let link = ShareLink.make(cloudName: credentials.cloudName, kind: job.kind, file: file)
         log.info("Uploaded \(filename, privacy: .public) -> \(link.absoluteString, privacy: .public)")
         copyToClipboard(link)
-        NSWorkspace.shared.open(link)
+        if opensShareLinks() { NSWorkspace.shared.open(link) }
         let thumbnail = job.kind == .image ? await Self.thumbnail(of: fileURL) : nil
         onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: filename,
                                 uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount),

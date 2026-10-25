@@ -39,7 +39,7 @@ The Media Files waiting to be uploaded, sent one at a time in the order they wer
 _Avoid_: Batch, job list
 
 **Share Link**:
-The short public URL of an uploaded Media File, pointing to exactly what was uploaded: the original file, or for a compressed video its MP4. A HEIC image's Share Link delivers it as JPEG so any browser can show it. It uses a random name that never reveals the original filename, and never changes what it points to. After each successful Upload it is opened in the default browser and placed on the clipboard, so the clipboard holds the latest one.
+The short public URL of an uploaded Media File, pointing to exactly what was uploaded: the original file, or for a compressed video its MP4. A HEIC image's Share Link delivers it as JPEG so any browser can show it. It uses a random name that never reveals the original filename, and never changes what it points to. After each successful Upload it is placed on the clipboard, so the clipboard holds the latest one, and opened in the default browser unless that's turned off on this Mac.
 _Avoid_: URL, public link, delivery URL
 
 ### What the menu shows

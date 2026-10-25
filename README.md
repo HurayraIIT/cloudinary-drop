@@ -1,6 +1,6 @@
 # CloudDrop
 
-A tiny macOS menu bar app: **drop an image or video on the cloud icon and get a public Cloudinary link.** The link opens in your browser and is copied to your clipboard.
+A tiny macOS menu bar app: **drop an image or video on the cloud icon and get a public Cloudinary link.** The link is copied to your clipboard and opens in your browser (you can turn that off).
 
 It's built for one person, one Cloudinary account and two Macs. It isn't distributed or notarized, and it will never be on the App Store.
 
@@ -72,7 +72,7 @@ You only do this once per Mac.
 
 ### 3. Launch at Login
 
-It's on by default. Toggle it from the menu.
+It's on by default. Toggle it from the menu's **Settings** submenu.
 
 ## Using it
 
@@ -80,10 +80,10 @@ It's on by default. Toggle it from the menu.
 
 For each file:
 1. The icon shows upload progress: `↑ 42%`.
-2. The **Share Link** opens in your default browser and is copied to the clipboard.
+2. The **Share Link** is copied to the clipboard and opens in your default browser. Turn off **Settings ▸ Open Share Links in Browser** to only copy it.
 3. The icon shows ✓ for 2 seconds, or ✗ if something went wrong.
 
-Drop several files and they upload **one at a time, in order**. Each one opens its own browser tab, so the clipboard ends up holding the **last** link. Dropping more files while an upload is running adds them to the end of the queue. Files from Photos or Mail keep their place even if they take a while to arrive, and anything dropped after them waits its turn. If one file fails, the rest still upload.
+Drop several files and they upload **one at a time, in order**. Each one opens its own browser tab (unless you've turned that off), and the clipboard ends up holding the **last** link. Dropping more files while an upload is running adds them to the end of the queue. Files from Photos or Mail keep their place even if they take a while to arrive, and anything dropped after them waits its turn. If one file fails, the rest still upload.
 
 ### The menu
 
@@ -95,11 +95,18 @@ Click the icon to see:
 | Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as uploaded, so a compressed video shows its compressed size) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
-| Compress Videos | On by default: each video is compressed on your Mac before it's uploaded (see [Video compression](#video-compression)). While it's on, choose a Quality Level below it: **CRF 22 · Best quality** (default), **CRF 24**, or **CRF 26 · Smallest files**. Without ffmpeg it's greyed out, with "Please install ffmpeg" below it. Saved on each Mac separately |
 | `1,210 images · 26 videos · 636 MB · 12% of credits` | Your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and how much of the month's 25 credits are used. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits, so the percentage is what's left. Cloudinary updates storage and credits once a day. Hidden until the first fetch works, or if the key can't read it |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
-| Launch at Login | Start CloudDrop when you log in |
+| Settings ▸ | **Open Share Links in Browser**, **Compress Videos** with its Quality Levels, and **Launch at Login**, each saved on this Mac. See below |
 | Quit CloudDrop | Quits immediately. Any running uploads stop, and unfinished Captures are saved to Downloads |
+
+The **Settings** submenu:
+
+| Item | What it does |
+|---|---|
+| Open Share Links in Browser | On by default: each successful upload opens its link in your browser. Off, uploads only copy the link. Turning it off while files are still uploading stops the rest from opening |
+| Compress Videos | On by default: each video is compressed on your Mac before it's uploaded (see [Video compression](#video-compression)). While it's on, choose a Quality Level below it: **CRF 22 · Best quality** (default), **CRF 24**, or **CRF 26 · Smallest files**. Without ffmpeg it's greyed out, with "Please install ffmpeg" below it. Saved on each Mac separately |
+| Launch at Login | Start CloudDrop when you log in |
 
 ### Icon states
 
@@ -191,7 +198,7 @@ After each rebuild, macOS asks whether CloudDrop may use its Keychain item as so
 
 **Uninstall:**
 
-1. Turn off **Launch at Login** in the menu.
+1. Turn off **Launch at Login** in the menu's **Settings** submenu.
 2. Remove the app:
    ```sh
    make uninstall
@@ -218,7 +225,7 @@ The key or secret is wrong, or it has been revoked. Copy the Cloudinary URL agai
 Images must be 10 MB or less and videos 100 MB or less. For videos, install ffmpeg (`brew install ffmpeg`) and keep **Compress Videos** on. If a compressed video is still too big, choose **CRF 26** and drop the original again (a Capture's is in Downloads as `cd-<name> (original)…`), or trim it.
 
 **Compress Videos is greyed out.**
-ffmpeg isn't installed at `/opt/homebrew/bin/ffmpeg`. Run `brew install ffmpeg`; the menu notices the next time it opens.
+ffmpeg isn't installed at `/opt/homebrew/bin/ffmpeg`. Run `brew install ffmpeg`; the Settings submenu notices the next time it opens.
 
 **An upload from the other Mac isn't in the menu yet.**
 The list refreshes when you open the menu, but not more than once every 30 seconds, and Cloudinary can take a few seconds to list a new upload. Close the menu and open it again a little later. If the menu says "Couldn't refresh Link History", hover over that line to see why.
@@ -276,7 +283,7 @@ Sources/
                    video Compression (ffmpeg arguments, progress, messages)
   CloudDrop/       The AppKit app: menu bar icon and drops, Upload Queue,
                    Link History, Usage line, menu, settings window, Keychain, Launch at Login,
-                   the Compress Videos setting
+                   the Settings submenu (Open Share Links in Browser, Compress Videos)
 Tests/             Swift Testing unit tests for CloudDropCore
 Resources/         Info.plist (menu-bar-only, bundle id com.hurayraiit.clouddrop)
 CONTEXT.md         Glossary: Drop, Media File, Capture, Size Limit, Upload, Share Link, …
@@ -316,10 +323,13 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] A HEIC photo's link ends in `.jpg` and displays in Chrome.
 - [ ] A screen recording (`.mov`, 10–100 MB) uploads and plays in the browser.
 - [ ] With Compress Videos on, a Retina screen recording over 100 MB shows ↘↖ `n%`, then ↑ `n%`, then ✓. Its link ends in `.mp4`, plays at 1920 wide, and the recent links show `<name>.mp4` with the compressed size. The original in Finder is unchanged.
-- [ ] The menu shows Compress Videos (checked) with three indented Quality Levels between the recent links and the Usage line, separated above and below. Unchecking it hides the levels; choosing CRF 26 sticks after a relaunch.
+- [ ] The menu's top level is the recent links, then (after a separator) the Usage line, Set Cloudinary URL… and Settings ▸, then Quit. **Settings ▸** shows Open Share Links in Browser (checked), then Compress Videos (checked) with three indented Quality Levels, then Launch at Login, with separators between the three groups. Unchecking Compress Videos hides the levels; choosing CRF 26 sticks after a relaunch.
+- [ ] With Open Share Links in Browser off, dropping a PNG copies its link and flashes ✓ but opens no tab. It stays off after a relaunch, and the recent links' Open button still opens.
+- [ ] Dropping 5 images and turning Open Share Links in Browser off after the first tab opens: no more tabs open, and the clipboard holds the last link.
+- [ ] With the Settings submenu open while the recent links or the Usage line refresh (open the menu and go straight to Settings), the submenu stays open; the top level updates after it closes.
 - [ ] Changing the Quality Level while a video is compressing doesn't affect that video or others already dropped.
 - [ ] With Compress Videos off, a 150 MB video is refused with "… Turn on Compress Videos to fit it."
-- [ ] With ffmpeg moved away (`brew unlink ffmpeg`), Compress Videos is greyed out and unchecked with "Please install ffmpeg" below it; a small video uploads as `.mov`, and a 150 MB one ends with "Install ffmpeg to compress it." `brew link ffmpeg` brings it back without relaunching.
+- [ ] With ffmpeg moved away (`brew unlink ffmpeg`), Compress Videos in Settings ▸ is greyed out and unchecked with "Please install ffmpeg" below it; a small video uploads as `.mov`, and a 150 MB one ends with "Install ffmpeg to compress it." `brew link ffmpeg` brings it back without relaunching.
 - [ ] A recording still over 100 MB after compressing (e.g. a long busy one) is refused with "is still … compressed … Try CRF 26." A Capture leaves `cd-<name> (original).mov` and `cd-<name> (compressed).mp4` in Downloads; a Finder file leaves only the compressed one.
 - [ ] Quitting while a video compresses leaves no `ffmpeg` process running (`pgrep ffmpeg`), and a Capture is saved to Downloads.
 - [ ] `make install` while a Capture is compressing leaves no `ffmpeg` running, and the relaunched app shows "Saved 1 unfinished Capture to Downloads".
@@ -356,10 +366,10 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Deleting a video row works the same way.
 - [ ] Deleting a row the other Mac already deleted still flashes ✓ and removes the row.
 - [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
-- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the compression section, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
+- [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
 - [ ] After an upload, the image or video count goes up by one at the next menu open after about 15 seconds. After a Delete, it goes down.
 - [ ] With the menu open when the Usage line first arrives, it appears in place and the highlight stays on the same row.
 - [ ] With Wi-Fi off, the Usage line keeps its last values and shows no error.
 - [ ] Deleting while a queue of uploads is running doesn't stop or reorder the uploads.
 - [ ] Turning Wi-Fi off mid-upload ends with ✗ and a network error, and the next queued file is still tried.
-- [ ] Launch at Login toggles and survives a restart.
+- [ ] Launch at Login (in Settings ▸) toggles and survives a restart.

@@ -4,7 +4,7 @@ This is a guide for AI coding agents working on CloudDrop. Read it before changi
 
 ## What this project is
 
-CloudDrop is a **personal** macOS menu bar app. The user drops image or video files on its menu bar icon, and each one is uploaded to Cloudinary. The resulting public link opens in the default browser and is copied to the clipboard.
+CloudDrop is a **personal** macOS menu bar app. The user drops image or video files on its menu bar icon, and each one is uploaded to Cloudinary. The resulting public link is copied to the clipboard and, unless that's turned off, opened in the default browser.
 
 - It has one user, one Cloudinary account and two Macs, both on macOS 26. The **M1 MacBook Air (8 GB, fanless) is the main one**; the M4 Pro is an office Mac being returned. Tune anything CPU-, heat- or memory-sensitive for the Air.
 - It is never distributed, notarized or put on the App Store.
@@ -87,6 +87,7 @@ Sources/
     UsageRowView.swift            The Usage line's menu row: one label in the filenames' font and colour, never highlighted
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential compressions and uploads, their fallbacks, Deletes (alongside, not queued), Last Error, logging
     VideoCompression.swift        The Compress Videos toggle and Quality Level in UserDefaults, and the current CompressionSetting (checks for ffmpeg each time)
+    OpenShareLinks.swift          The Open Share Links in Browser toggle in UserDefaults
     LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, hidden Deleted ones, thumbnail cache
     UsageTracker.swift            @MainActor Usage line: storage and credits hourly, counts every 5 minutes or after this Mac's Upload/Delete, the Link History's rate-limit pause
     SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete; reopened mid-save, it shows that save
@@ -147,10 +148,12 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Uploads**
 - **Sequential uploads.** One at a time, in drop order. A new Drop joins the end of the queue, and a failed Upload never stops the rest.
-- **Every successful Upload opens the Share Link in the browser *and* copies it.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
+- **Every successful Upload copies its Share Link, and opens it in the browser while Open Share Links in Browser is on.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
+  - The toggle is per Mac (UserDefaults) and on by default. Unlike Compression, it's read **as each Upload succeeds**, so turning it off mid-queue stops the tabs that haven't opened yet.
+  - Turning it off only skips the browser: the clipboard and the ✓ flash are unchanged, and so are the Link History rows' Copy and Open.
 - **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading: on the original for images and for videos when Compression is off or ffmpeg is missing, and on the compressed file otherwise. They're checked at Drop time, again when the file's turn comes, and while it's streamed into the multipart body. Images are never transcoded or downscaled. There are no chunked uploads (100 MB is already the plan's per-file maximum).
 - **Compression** ([ADR 0008](docs/adr/0008-compress-videos-before-upload.md)):
-  - ffmpeg is the user's Homebrew one, looked up at `/opt/homebrew/bin/ffmpeg` (a GUI app doesn't get the shell's PATH). It's never bundled or installed by the app. It's looked up when the menu opens and before each compression.
+  - ffmpeg is the user's Homebrew one, looked up at `/opt/homebrew/bin/ffmpeg` (a GUI app doesn't get the shell's PATH). It's never bundled or installed by the app. It's looked up when the Settings submenu opens and before each compression.
   - The pipeline is fixed: VideoToolbox decode, `transpose_vt` for a 90°/180°/270° display rotation, `scale_vt` only to fit within 1920×1920 (keep aspect, round down to even), libx264 `veryfast`, `-threads 2`, ≤ 30 fps, AAC 96 kbps, MP4 with `+faststart`. Only the CRF changes, from the Quality Level.
   - The toggle and Quality Level are per Mac (UserDefaults), on and CRF 22 by default, and **read at Drop time**: changing them never affects a video already dropped.
   - Every video is compressed when it's on, and the compressed file is uploaded **even if it's bigger** than the original. Its `display_name` ends in `.mp4` to match its Share Link.
@@ -193,11 +196,12 @@ These are decisions the user made during design. Changing any of them needs thei
   - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
-- **The compression section** sits between the Link History and the Usage line, with a separator above and below. It uses native items, like Launch at Login:
+- **The Settings submenu** (`Settings ▸`, after Set Cloudinary URL…) holds every setting but the Cloudinary URL, as native checkmark items in three groups split by separators: `Open Share Links in Browser`, then the compression section, then `Launch at Login`. Its items are built each time it opens, and an open menu's rebuild waits until it closes, so it doesn't vanish under the pointer.
+- **The compression section**:
   - `Compress Videos` with a checkmark, then three indented checkmark items, shown only while it's on: `CRF 22 · Best quality`, `CRF 24`, `CRF 26 · Smallest files`.
   - Without ffmpeg, `Compress Videos` is disabled and unchecked (whatever is saved), with a grey `Please install ffmpeg` line below it and no Quality Levels.
-- **The Usage line** is one 30 pt `UsageRowView` after the separator under the compression section, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
-  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Launch at Login), and never highlights.
+- **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
+  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Settings; no top-level item has a checkmark), and never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
   - The Free plan has **no storage limit**: storage, bandwidth and transformations share 25 credits a month. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left.
   - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
@@ -206,7 +210,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - **No notifications and no sounds.** Feedback is the icon only.
 
 **Setup**
-- **Launch at Login** is registered once on first launch, tracked by the `didApplyDefaultLoginItem` UserDefaults flag, and toggled from the menu.
+- **Launch at Login** is registered once on first launch, tracked by the `didApplyDefaultLoginItem` UserDefaults flag, and toggled from the Settings submenu.
 - **Credentials** are saved by updating the Keychain item in place (`KeychainWrite`), and added only when there's none, so a failed save keeps the working URL. They're read from the Keychain once, at launch for the first Link History fetch, and cached in `StatusController`. After a rebuild the Keychain prompt therefore appears as soon as the new build starts. The settings window updates the cache when it saves. It runs one save at a time; reopened mid-save, it shows that save with Save disabled, and a save that finishes after a reopen neither closes the window nor clears what was typed since.
   - Only "no item" is cached as missing. Any other failure (e.g. Deny on the prompt) sets the Last Error "Couldn't read the Cloudinary URL from the Keychain" and is retried on the **next Drop only**, never on menu clicks, so a Deny doesn't bring the prompt back every time the icon is clicked.
 
@@ -297,7 +301,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
 - They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), Deletes (the destroy request and its signing and encoding, reading the answer), Compression (the setting, size checks and messages, names, ffmpeg arguments, progress parsing, rotation), Capture recovery when Downloads can't be written, the Upload Queue's order with promised files, the rate-limit pause against late answers, the Keychain's update-or-add, settings saves, and files that grow past the Size Limit in the queue.
 
 **App target**
-- It has no unit tests. After touching `StatusController`, `UploadQueue`, `VideoCompression`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
+- It has no unit tests. After touching `StatusController`, `UploadQueue`, `VideoCompression`, `OpenShareLinks`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
 
 **Live checks against Cloudinary**
 - These are allowed, carefully. The account is the user's real one.
@@ -347,7 +351,7 @@ Don't add any of these unless the user explicitly asks, and then revisit ADR 000
 - retries
 - a quit confirmation
 - notifications and sounds
-- a settings UI beyond the one field, Launch at Login, and the compression section
+- a settings UI beyond the one field and the Settings submenu (Open Share Links in Browser, the compression section, Launch at Login)
 
 ## Security and privacy rules
 

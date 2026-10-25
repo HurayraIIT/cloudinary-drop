@@ -10,7 +10,7 @@ The encoder is the user's Homebrew ffmpeg with libx264. It isn't bundled, and th
 
 That takes about 20–30% of the recording's length, about one core and about 330 MB of memory. A compressed file still over the limit is refused (saved to Downloads, both versions for a Capture) and never compressed again at a lower level. If ffmpeg fails, the original is uploaded when it fits the limit. Compression ignores the Mac's thermal state.
 
-The menu's Compress Videos toggle and its three Quality Levels are the one exception to ADR 0004's "no settings UI beyond the one field". The levels trade sharpness for size, and only the user can judge that, recording by recording.
+The menu's Compress Videos toggle and its three Quality Levels (now in the Settings submenu, see ADR 0004) were the first exception to ADR 0004's "no settings UI beyond the one field". The levels trade sharpness for size, and only the user can judge that, recording by recording.
 
 ## Considered Options
 

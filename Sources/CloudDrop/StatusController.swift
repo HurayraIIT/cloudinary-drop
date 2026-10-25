@@ -12,6 +12,9 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private let history = LinkHistory()
     private let usage = UsageTracker()
     private let menu = NSMenu()
+    /// Kept across rebuilds of the menu, because a submenu can belong to only one item; its items are made each time it opens.
+    private let settingsMenu = NSMenu()
+    private let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
     private let promiseQueue = OperationQueue()
     private lazy var settings = SettingsWindowController { [weak self] saved in
         self?.storedCredentials = .success(saved)
@@ -25,6 +28,9 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private var flashToken = 0
 
     private var isMenuOpen = false
+    private var isSettingsMenuOpen = false
+    /// An open menu's rebuild that waited for the Settings submenu to close, so it doesn't vanish under the pointer.
+    private var needsRebuild = false
     /// What the open menu's Link History section shows, to tell a real change from a thumbnail arriving.
     private var shownHistory: [String] = []
     private var shownUsage: String?
@@ -35,6 +41,8 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     override init() {
         super.init()
         menu.delegate = self
+        settingsMenu.delegate = self
+        settingsItem.submenu = settingsMenu
         statusItem.menu = menu
         statusItem.button?.imagePosition = .imageLeft
 
@@ -48,9 +56,10 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             return try self.credentials()
         }
         queue.compression = { VideoCompression.setting }
+        queue.opensShareLinks = { OpenShareLinks.isEnabled }
         queue.onEvent = { [weak self] event in self?.handle(event) }
         // An Upload or Delete that finishes after the Cloudinary URL changed to another cloud belongs to the old
-        // one, so it's kept out of the new Link History. Its Share Link was still opened and copied.
+        // one, so it's kept out of the new Link History. Its Share Link was still copied (and opened, if that's on).
         queue.onUploaded = { [weak self] entry, thumbnail, cloudName in
             guard let self, self.isCurrentCloud(cloudName) else { return }
             self.history.add(entry, thumbnail: thumbnail)
@@ -251,6 +260,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     // MARK: Menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === self.menu else { return buildSettingsMenu() }
         // Shows what's already known now; a fresh list replaces it in place when it arrives.
         history.refresh()
         usage.refresh()
@@ -258,10 +268,15 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        isMenuOpen = true
+        if menu === settingsMenu { isSettingsMenuOpen = true } else { isMenuOpen = true }
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        guard menu === self.menu else {
+            isSettingsMenuOpen = false
+            if needsRebuild, isMenuOpen { rebuildOpenMenu() }
+            return
+        }
         isMenuOpen = false
         highlightedLink = nil
     }
@@ -282,6 +297,10 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     private func rebuildOpenMenu() {
+        guard !isSettingsMenuOpen else {
+            needsRebuild = true
+            return
+        }
         buildMenu()
         for item in menu.items {
             (item.view as? HistoryRowView)?.isHighlighted = item.representedObject as? URL == highlightedLink
@@ -303,6 +322,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
     private func buildMenu() {
         menu.removeAllItems()
+        needsRebuild = false
         rowViews = [:]
         shownHistory = historySection()
         shownUsage = usage.usage.line
@@ -370,27 +390,39 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        let compression = VideoCompression.setting
-        addCompressionSection(compression)
-        menu.addItem(.separator())
         if let line = shownUsage {
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            item.view = UsageRowView(line: line, hasStateColumn: LoginItem.isEnabled || compression.isOn)
+            item.view = UsageRowView(line: line)
             item.isEnabled = false
             menu.addItem(item)
         }
 
-        let settingsItem = NSMenuItem(title: "Set Cloudinary URL…", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
+        let urlItem = NSMenuItem(title: "Set Cloudinary URL…", action: #selector(openSettings), keyEquivalent: ",")
+        urlItem.target = self
+        menu.addItem(urlItem)
+
         menu.addItem(settingsItem)
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit CloudDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    /// Built each time it opens, so it checks for ffmpeg then.
+    private func buildSettingsMenu() {
+        settingsMenu.removeAllItems()
+        let openItem = NSMenuItem(title: "Open Share Links in Browser", action: #selector(toggleOpenShareLinks), keyEquivalent: "")
+        openItem.target = self
+        openItem.state = OpenShareLinks.isEnabled ? .on : .off
+        settingsMenu.addItem(openItem)
+
+        settingsMenu.addItem(.separator())
+        addCompressionSection(VideoCompression.setting)
+        settingsMenu.addItem(.separator())
 
         let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
         loginItem.state = LoginItem.isEnabled ? .on : .off
-        menu.addItem(loginItem)
-
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit CloudDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        settingsMenu.addItem(loginItem)
     }
 
     /// Compress Videos, and its Quality Levels while it's on. Without ffmpeg it's disabled and unchecked,
@@ -400,7 +432,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
                                 action: compression == .noFFmpeg ? nil : #selector(toggleCompression), keyEquivalent: "")
         toggle.target = self
         toggle.state = compression.isOn ? .on : .off
-        menu.addItem(toggle)
+        settingsMenu.addItem(toggle)
 
         switch compression {
         case let .on(selected):
@@ -410,19 +442,20 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
                 item.tag = level.rawValue
                 item.indentationLevel = 1
                 item.state = level == selected ? .on : .off
-                menu.addItem(item)
+                settingsMenu.addItem(item)
             }
         case .noFFmpeg:
             let item = NSMenuItem(title: "Please install ffmpeg", action: nil, keyEquivalent: "")
             item.indentationLevel = 1
             item.isEnabled = false
-            menu.addItem(item)
+            settingsMenu.addItem(item)
         case .off:
             break
         }
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu === self.menu else { return }
         highlightedLink = item?.representedObject as? URL
         for menuItem in menu.items {
             (menuItem.view as? HistoryRowView)?.isHighlighted = menuItem === item
@@ -453,6 +486,10 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
 
     @objc private func openSettings() {
         showSettings()
+    }
+
+    @objc private func toggleOpenShareLinks() {
+        OpenShareLinks.isEnabled.toggle()
     }
 
     @objc private func toggleCompression() {
