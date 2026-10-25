@@ -203,7 +203,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
   - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Settings; no top-level item has a checkmark), and never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
-  - The Free plan has **no storage limit**: storage, bandwidth and transformations share 25 credits a month. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left.
+  - The Free plan has **no storage limit**: storage, bandwidth and transformations share the account's credit allowance. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left. The percentage comes directly from Cloudinary and reflects allowance changes automatically; never assume a fixed 25-credit allowance.
   - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
   - No tooltip, no "Loading…", never the Last Error. Hidden until every value is known.
 - **Quit is immediate**, with no confirmation while uploads are running.

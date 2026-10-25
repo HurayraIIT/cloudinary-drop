@@ -934,14 +934,15 @@ private final class Recorded<Value: Sendable>: Sendable {
         #expect(Usage(storedBytes: 2048, creditsUsedPercent: 0, images: 1, videos: 0).line == "1 image · 0 videos · 2 KB · 0% of credits")
     }
 
-    @Test func readsTheUsageAPI() throws {
+    @Test(arguments: [(25.0, 12.16), (31.0, 9.8064516129)])
+    func readsTheUsageAPI(_ creditLimit: Double, _ usedPercent: Double) throws {
         let request = UsageReader.storageRequest(credentials: credentials)
         #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/usage")
         #expect(request.httpMethod == "GET")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic MTIzOmFiYw==")
-        let json = #"{"plan":"Free","storage":{"usage":666508855,"credits_usage":0.62},"credits":{"usage":3.04,"limit":25.0,"used_percent":12.16}}"#
+        let json = #"{"plan":"Free","storage":{"usage":666508855,"credits_usage":0.62},"credits":{"usage":3.04,"limit":\#(creditLimit),"used_percent":\#(usedPercent)}}"#
         let usage = try UsageReader.storage(status: 200, data: Data(json.utf8), rateLimitReset: nil)
-        #expect(usage == Usage(storedBytes: 666_508_855, creditsUsedPercent: 12.16))
+        #expect(usage == Usage(storedBytes: 666_508_855, creditsUsedPercent: usedPercent))
         #expect(throws: HistoryFetchError.unexpectedResponse(200)) {
             try UsageReader.storage(status: 200, data: Data(#"{"storage":{"usage":1}}"#.utf8), rateLimitReset: nil)
         }
