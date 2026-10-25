@@ -9,6 +9,7 @@ final class SettingsWindowController: NSWindowController {
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let onSaved: (CloudinaryCredentials) -> Void
+    private var attempts = SaveAttempts()
 
     init(onSaved: @escaping (CloudinaryCredentials) -> Void) {
         self.onSaved = onSaved
@@ -26,11 +27,15 @@ final class SettingsWindowController: NSWindowController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// Reopened while a save is still checking, it shows that save's progress with Save disabled.
     func show(current: CloudinaryCredentials?) {
+        attempts.windowOpened()
         currentLabel.stringValue = current.map { "Current cloud: \($0.cloudName)" } ?? "No Cloudinary URL saved yet."
-        statusLabel.stringValue = ""
-        field.stringValue = ""
-        saveButton.isEnabled = true
+        if !attempts.isSaving {
+            statusLabel.stringValue = ""
+            field.stringValue = ""
+            saveButton.isEnabled = true
+        }
         NSApp.activate()
         window?.center()
         showWindow(nil)
@@ -74,36 +79,39 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func save() {
         // Return in the field still sends this while a check is running.
-        guard saveButton.isEnabled else { return }
+        guard !attempts.isSaving else { return }
         guard let credentials = CloudinaryCredentials(parsing: field.stringValue) else {
             statusLabel.stringValue = "That doesn't look like cloudinary://key:secret@cloud"
             return
         }
+        guard let attempt = attempts.begin(fieldText: field.stringValue) else { return }
         saveButton.isEnabled = false
         statusLabel.stringValue = "Checking with Cloudinary…"
 
         Task {
+            defer {
+                attempts.finish(attempt)
+                saveButton.isEnabled = true
+            }
             do {
                 try await Uploader.verify(credentials)
                 try KeychainStore.save(credentials)
                 onSaved(credentials)
                 currentLabel.stringValue = "Current cloud: \(credentials.cloudName)"
-                field.stringValue = ""
+                if attempts.mayClearField(after: attempt, currentText: field.stringValue) { field.stringValue = "" }
                 // Uploading is what matters, so a key that can't list or delete uploads is still saved, with a warning.
                 let cannotList = await Self.cannotList(credentials)
                 let cannotDelete = await Self.cannotDelete(credentials)
                 if cannotList || cannotDelete {
                     statusLabel.stringValue = Self.warning(cannotList: cannotList, cannotDelete: cannotDelete)
-                    saveButton.isEnabled = true
                     return
                 }
                 statusLabel.stringValue = "Saved."
                 try? await Task.sleep(for: .seconds(1))
-                close()
+                if attempts.mayClose(after: attempt) { close() }
             } catch {
                 statusLabel.stringValue = error.localizedDescription
             }
-            saveButton.isEnabled = true
         }
     }
 

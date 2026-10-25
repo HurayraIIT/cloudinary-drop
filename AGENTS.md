@@ -28,7 +28,7 @@ The ADRs:
 - **0007:** Delete from a Link History row: the signed `destroy` with `invalidate=true`, an alert with Cancel as default, Deleted assets hidden locally while search catches up.
 - **0008:** videos are compressed on the Mac with the user's Homebrew ffmpeg (libx264) before uploading, and the Size Limit is checked afterwards. The menu has a Compress Videos toggle and three Quality Levels (CRF 22/24/26). Apple's encoder, slower presets, native resolution and retrying at lower quality were rejected.
 
-`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0008-…`) and keep it to a paragraph or two.
+`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0009-…`) and keep it to a paragraph or two.
 
 ## Environment facts
 
@@ -43,7 +43,8 @@ The ADRs:
 ```sh
 make test       # unit tests; the ONLY correct way to run them
 make app        # release build → build/CloudDrop.app (ad-hoc signed)
-make install    # make app, then kill the running app, copy it to /Applications and relaunch
+make install    # make app, then quit the running app, copy it to /Applications and relaunch
+make quit       # SIGTERM the running app (it quits normally), wait up to 10 s, then kill it and any ffmpeg it left
 make uninstall
 make clean
 ```
@@ -68,13 +69,16 @@ Sources/
     MediaKind.swift               image/video from a UTType; Size Limits; Refusal messages; checkMediaFile(...)
     ShareLink.swift               Share Link from public_id + format (root path for images, no version, HEIC/HEIF → .jpg); MenuText.truncateMiddle and fileSize
     Thumbnail.swift               Square, centre-cropped image thumbnail for the Link History via ImageIO (decodes small, never the whole file); the Cloudinary thumbnail URL and decoding it
-    HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads and hiding Deleted ones; HistoryTime labels
-    TemporaryFiles.swift          Names the multipart bodies, Drop folders and capture folders in $TMPDIR; isCapture; saves Captures to Downloads as `cd-<name>`; removeLeftovers() sweeps the rest and saves leftover Captures
-    Uploader.swift                Signing, the streamed multipart upload with progress, reading the response, verify() (ping + upload-permission probe)
+    HistorySearch.swift           HistoryEntry; the Search API request for the Link History, reading its answer (403, rate limit), merging this Mac's unconfirmed Uploads and hiding Deleted ones; RefreshStatus (the rate-limit pause, kept apart from failures); HistoryTime labels
+    TemporaryFiles.swift          Names the multipart bodies, Drop folders and capture folders in $TMPDIR; isCapture; keep(capture:) moves one out of TemporaryItems; saves Captures to Downloads as `cd-<name>`; removeLeftovers() sweeps the rest, saves leftover Captures and keeps any it couldn't save
+    Uploader.swift                Signing, the streamed multipart upload with progress (stopping past the Size Limit), reading the response, verify() (ping + upload-permission probe)
+    UploadOrder.swift             The Upload Queue's order: places reserved for promised files at Drop time, with the CompressionSetting read then
+    SaveAttempts.swift            The settings window's saves: one at a time, and a late one never closes a reopened window or clears new input
+    KeychainWrite.swift           Update-or-add for the Keychain item, behind closures so it's tested without the real Keychain
     Delete.swift                  The signed destroy request (invalidate=true), reading its answer, the delete-permission probe
     Usage.swift                   Usage (the menu line's text), UsageSchedule (when each call is due) and UsageReader: the Usage API's stored bytes and credits, and the account-wide image and video counts
-    Compression.swift             QualityLevel, CompressionSetting (on/off/no ffmpeg), the ffmpeg path and arguments, compressed and Downloads names, CompressionProgress (reads `-progress`), the fallback messages
-    Compressor.swift              Runs ffmpeg (and ffprobe for the length) as a Process: progress, the end of stderr on failure, terminate on task cancellation
+    Compression.swift             QualityLevel, CompressionSetting (on/off/no ffmpeg), Rotation and VideoProbe (ffprobe's length and rotation), the ffmpeg path and arguments, compressed and Downloads names, CompressionProgress (reads `-progress`), the fallback messages
+    Compressor.swift              Runs ffmpeg (and ffprobe for the length and rotation) as a Process: progress, the end of stderr on failure, terminate on task cancellation
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
@@ -85,8 +89,8 @@ Sources/
     VideoCompression.swift        The Compress Videos toggle and Quality Level in UserDefaults, and the current CompressionSetting (checks for ffmpeg each time)
     LinkHistory.swift             @MainActor Link History: throttled background refresh, rate-limit pause, this Mac's unconfirmed Uploads, hidden Deleted ones, thumbnail cache
     UsageTracker.swift            @MainActor Usage line: storage and credits hourly, counts every 5 minutes or after this Mac's Upload/Delete, the Link History's rate-limit pause
-    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete
-    KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL
+    SettingsWindowController.swift  One secure text field: parse, Uploader.verify, KeychainStore.save, then a warning if the key can't search or delete; reopened mid-save, it shows that save
+    KeychainStore.swift           Generic password; service com.hurayraiit.clouddrop, account CLOUDINARY_URL; saving updates it in place
     LoginItem.swift               SMAppService.mainApp; registers once on first launch (on by default)
 Tests/CloudDropCoreTests/         Swift Testing (`import Testing`, @Suite/@Test/#expect) for CloudDropCore only
 Resources/Info.plist              LSUIElement=true (no Dock icon), LSMinimumSystemVersion 26.0
@@ -102,14 +106,14 @@ Makefile                          Build, bundle, sign, install, and the test wra
 3. `performDragOperation`:
    - calls `queue.beginDrop()`, which **clears the Last Error**
    - retries the Keychain read if the last one failed, then checks that credentials exist. If not, it refuses, saves any Captures in the Drop to Downloads, and opens settings when no Cloudinary URL is saved (not when the Keychain couldn't be read)
-   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own Drop folder and is deleted afterwards, whatever happened.
+   - reads file URLs from the pasteboard, falling back to `NSFilePromiseReceiver`. Each promise is received into its own Drop folder and is deleted afterwards, whatever happened. Each promise gets its place in the Upload Queue (`queue.reserve()`, which also reads the `CompressionSetting`) before receiving starts, so files keep their drop order whichever arrives first, and a later Drop waits behind them. A failed receipt releases its place. There's no timeout: Photos can take minutes to download an iCloud original.
    - a Capture (a file URL in `…/TemporaryItems/…`, from a floating screenshot or screen recording thumbnail) is moved into its own capture folder at once, because macOS deletes it when the drag ends. It's deleted after a successful Upload; refused or failed, it's moved to `~/Downloads/cd-<name>` (`cd-<name> 2` on a clash) and the Last Error ends with "Saved to Downloads."
-4. `UploadQueue.add` reads the `CompressionSetting` (kept on the Job, so later menu changes don't affect it) and runs `checkMediaFile` (type and Size Limit; a video skips the Size Limit when it will be compressed). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes is appended to `pending`.
-5. `drain()` works **one file at a time**. A video with Compression on is first compressed into `$TMPDIR/clouddrop-compressed/<uuid>.mp4` (icon ↘↖ `NN%`), checked against the Size Limit, and that file is uploaded as `<name>.mp4`; the over-limit and ffmpeg-failure paths are in the Compression invariants below. For each successful Upload:
+4. `UploadQueue.add` reads the `CompressionSetting` (from the reserved place for a promised file; kept on the Job, so later menu changes don't affect it) and runs `checkMediaFile` (type and Size Limit; a video skips the Size Limit when it will be compressed). A file whose size can't be read is refused as unreadable, never waved past the Size Limit. A file that fails gets `refuse(message)`, which sets the Last Error and flashes ✗. A file that passes fills its place in the `UploadOrder`, or is appended. A refused promised file releases its place.
+5. `drain()` works **one file at a time**, and waits at a place whose file is still arriving. Just before an original is uploaded, its size is checked again, and `Uploader` stops streaming it once it passes the Size Limit (a file that grew while waiting): refused with `Refusal.tooLarge` and its new size, a Capture saved to Downloads, and the queue goes on. A video with Compression on is first compressed into `$TMPDIR/clouddrop-compressed/<uuid>.mp4` (icon ↘↖ `NN%`), checked against the Size Limit, and that file is uploaded as `<name>.mp4`; the over-limit and ffmpeg-failure paths are in the Compression invariants below. For each successful Upload:
    - `ShareLink.make` builds the Share Link
    - it's copied to the clipboard and opened with `NSWorkspace.shared.open`
    - for an image, a thumbnail is made (off the main actor) while the file is still on disk
-   - it's handed to `LinkHistory.add` as an unconfirmed entry, sorted by Cloudinary's `created_at` from the upload response
+   - it's handed to `LinkHistory.add` as an unconfirmed entry, sorted by Cloudinary's `created_at` from the upload response, unless the Cloudinary URL has changed to another cloud since the Upload began (the Share Link is still opened and copied). A Delete that finishes after such a change doesn't touch the new Link History either
    - the ✓ flash is shown
 
    A failure sets the Last Error and flashes ✗, and the queue **continues** with the next file.
@@ -117,7 +121,7 @@ Makefile                          Build, bundle, sign, install, and the test wra
 
 ### How the Link History refreshes
 
-1. `LinkHistory.refresh()` runs at launch and from `menuNeedsUpdate`. It skips if a fetch is running, the last one started under 30 s ago, or a rate limit pause hasn't ended.
+1. `LinkHistory.refresh()` runs at launch and from `menuNeedsUpdate`. It skips if a fetch is running, the last one started under 30 s ago, or a rate limit pause hasn't ended. The pause is kept in `RefreshStatus` apart from refresh failures: a fetch that answers after the Usage line started a pause never ends it, and a shorter pause never shortens it.
 2. The menu is built at once from what's already known. When the fetch returns, an **open** menu is rebuilt only if its Link History section changed (public_ids, the problem line, loading/empty); a thumbnail arriving just updates its row. The highlight is restored by Share Link.
 3. A successful fetch replaces the fetched list. `HistorySearch.stillUnconfirmed` keeps this Mac's own Uploads that search doesn't list yet, for up to 2 minutes after the Upload.
 4. Image rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), cached in memory by public_id and pruned to what's shown.
@@ -135,7 +139,7 @@ Makefile                          Build, bundle, sign, install, and the test wra
 1. The row's trash button closes the menu, then `StatusController.confirmDelete` shows an `NSAlert` (run on the next main-actor turn, outside the menu's tracking loop). Cancel is added first and given Return; Delete is red and has no key equivalent.
 2. `UploadQueue.delete` clears the Last Error and calls `Uploader.delete` at once, alongside any running Upload, on the same session.
 3. `ok` and `not found` both succeed: `LinkHistory.remove` hides the public_id, and ✓ flashes. A failure sets the Last Error to `Couldn't delete <file>: …` and flashes ✗; the row stays.
-4. `HistorySearch.stillDeleted` keeps hiding the public_id while fetches still list it, for up to 2 minutes after the Delete. No fetch is started for it, so the list is one short until the next refresh.
+4. `HistorySearch.stillDeleted` keeps hiding the public_id while fetches still list it, for up to 2 minutes after the Delete. A fetch that started before the Delete never ends the hiding, even if it doesn't list the entry (an Upload Deleted before search indexed it). No fetch is started for it, so the list is one short until the next refresh.
 
 ## Invariants: don't break these
 
@@ -144,20 +148,21 @@ These are decisions the user made during design. Changing any of them needs thei
 **Uploads**
 - **Sequential uploads.** One at a time, in drop order. A new Drop joins the end of the queue, and a failed Upload never stops the rest.
 - **Every successful Upload opens the Share Link in the browser *and* copies it.** The clipboard ends up holding the last success. There's no batch or joined-links mode.
-- **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading: on the original for images and for videos when Compression is off or ffmpeg is missing, and on the compressed file otherwise. Images are never transcoded or downscaled. There are no chunked uploads (100 MB is already the plan's per-file maximum).
+- **Size Limits:** images ≤ 10,485,760 bytes and videos ≤ 104,857,600 bytes, checked **before** uploading: on the original for images and for videos when Compression is off or ffmpeg is missing, and on the compressed file otherwise. They're checked at Drop time, again when the file's turn comes, and while it's streamed into the multipart body. Images are never transcoded or downscaled. There are no chunked uploads (100 MB is already the plan's per-file maximum).
 - **Compression** ([ADR 0008](docs/adr/0008-compress-videos-before-upload.md)):
   - ffmpeg is the user's Homebrew one, looked up at `/opt/homebrew/bin/ffmpeg` (a GUI app doesn't get the shell's PATH). It's never bundled or installed by the app. It's looked up when the menu opens and before each compression.
-  - The pipeline is fixed: VideoToolbox decode, `scale_vt` only to fit within 1920×1920 (keep aspect, round down to even), libx264 `veryfast`, `-threads 2`, ≤ 30 fps, AAC 96 kbps, MP4 with `+faststart`. Only the CRF changes, from the Quality Level.
+  - The pipeline is fixed: VideoToolbox decode, `transpose_vt` for a 90°/180°/270° display rotation, `scale_vt` only to fit within 1920×1920 (keep aspect, round down to even), libx264 `veryfast`, `-threads 2`, ≤ 30 fps, AAC 96 kbps, MP4 with `+faststart`. Only the CRF changes, from the Quality Level.
   - The toggle and Quality Level are per Mac (UserDefaults), on and CRF 22 by default, and **read at Drop time**: changing them never affects a video already dropped.
   - Every video is compressed when it's on, and the compressed file is uploaded **even if it's bigger** than the original. Its `display_name` ends in `.mp4` to match its Share Link.
   - While compressing, the icon is `arrow.down.right.and.arrow.up.left` with ` NN%` (ffmpeg's progress against the video's length), then the usual uploading icon.
   - No retry at a lower Quality Level, and no pausing for heat. Over the limit after compressing → refused (`rec.mov is still 120 MB compressed, video limit is 100 MB.`, plus `Try CRF 26.` below CRF 26), and saved to Downloads: a Capture as `cd-rec (original).mov` and `cd-rec (compressed).mp4`, a Finder file as `cd-rec (compressed).mp4` only.
   - ffmpeg fails (including sources the M1 can't hardware-decode, such as AV1): the original is uploaded if it fits, with the Last Error `Couldn't compress rec.mov, uploaded it as is`; otherwise it's refused as usual, ending with `Couldn't compress it.` (a Capture saved as `cd-rec (original).mov`). There's no software-decoding fallback.
-  - The scale always runs (`scale_vt` with `iw`/`ih` expressions), so an odd size that otherwise fits is still rounded down to even. `-noautorotate` is required: with GPU frames ffmpeg can't rotate, and without it a portrait phone video loses its rotation and plays sideways.
+  - The scale always runs (`scale_vt` with `iw`/`ih` expressions), so an odd size that otherwise fits is still rounded down to even. `-noautorotate` is required, because ffmpeg's own rotation needs CPU frames. It doesn't keep the rotation as metadata (with ffmpeg 8.1 the output has none), so the rotation ffprobe reports is applied with `transpose_vt` before the scale, and the output is upright with no rotation metadata. Other display matrices (mirrored, odd angles) are left alone.
   - A video refused for size without compressing ends its message with `Install ffmpeg to compress it.` (no ffmpeg) or `Turn on Compress Videos to fit it.` (off).
   - Quitting stops ffmpeg and deletes its partial output; the launch and quit sweep removes any left behind. Original files are never modified.
 - **A user's files are never moved or deleted.** Only Captures and files received from a file promise are. `TemporaryFiles.isCapture` matches just `/TemporaryItems/` and CloudDrop's own `clouddrop-captures/`. Never widen it to `/tmp` or `/var/folders`: a file the user drags from there in Finder is theirs, and would be deleted after uploading.
-- **A Capture is never lost.** It's the only copy, so whenever it won't be uploaded (refused, failed, no Cloudinary URL, or CloudDrop quits or crashes first) it's saved to Downloads, and the Last Error says so. Captures saved by the cleanup at quit are counted in the `capturesSavedAtQuit` UserDefaults key, and the next launch reports them with those found at launch: "Saved 2 unfinished Captures to Downloads", with a ✗ flash. Files received from a file promise are never saved: their original still exists.
+- **A Capture is never lost.** It's the only copy, so whenever it won't be uploaded (refused, failed, no Cloudinary URL, or CloudDrop quits or crashes first) it's saved to Downloads, and the Last Error says so. Captures saved by the cleanup at quit are counted in the `capturesSavedAtQuit` UserDefaults key, and the next launch reports them with those found at launch: "Saved 2 unfinished Captures to Downloads", with a ✗ flash.
+  - One that **can't** be saved (Downloads not writable, disk full) stays in its `clouddrop-captures/<uuid>/` folder. Only empty capture folders are removed. The sweep at quit and at every launch tries again, and the launch reports it: "Couldn't save 1 unfinished Capture to Downloads, will try again at next launch". A Drop-time refusal or failure ends with "Couldn't save it to Downloads." Never say it was saved when it wasn't. Files received from a file promise are never saved: their original still exists.
 - **Accepted types:** `UTType` conforming to `.image` → image, `.movie` → video. Everything else is refused.
 
 **Naming and links**
@@ -202,7 +207,7 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Setup**
 - **Launch at Login** is registered once on first launch, tracked by the `didApplyDefaultLoginItem` UserDefaults flag, and toggled from the menu.
-- **Credentials** are read from the Keychain once, at launch for the first Link History fetch, and cached in `StatusController`. After a rebuild the Keychain prompt therefore appears as soon as the new build starts. The settings window updates the cache when it saves.
+- **Credentials** are saved by updating the Keychain item in place (`KeychainWrite`), and added only when there's none, so a failed save keeps the working URL. They're read from the Keychain once, at launch for the first Link History fetch, and cached in `StatusController`. After a rebuild the Keychain prompt therefore appears as soon as the new build starts. The settings window updates the cache when it saves. It runs one save at a time; reopened mid-save, it shows that save with Save disabled, and a save that finishes after a reopen neither closes the window nor clears what was typed since.
   - Only "no item" is cached as missing. Any other failure (e.g. Deny on the prompt) sets the Last Error "Couldn't read the Cloudinary URL from the Keychain" and is retried on the **next Drop only**, never on menu clicks, so a Deny doesn't bring the prompt back every time the icon is clicked.
 
 ## The Cloudinary API: what matters
@@ -227,7 +232,7 @@ These are decisions the user made during design. Changing any of them needs thei
 - Each chunk is copied inside `autoreleasepool`. Without it every chunk stays alive until the upload finishes: a 75 MB video peaked at about 80 MB before this fix and about 17 MB after. Never load a whole file into `Data`.
 - Progress comes from a per-task `URLSessionTaskDelegate` (`didSendBodyData`) and is hopped to the main actor. `UploadQueue` ignores progress from an earlier Upload and only redraws the icon when the whole percentage changes.
 - `UploadQueue` keeps **one `Uploader` (one `URLSession`)** and reuses it while the Cloudinary URL stays the same. A replaced one is `invalidate()`d.
-- Quitting mid-upload skips the `defer` that deletes the multipart body, so `TemporaryFiles.removeLeftovers()` runs at launch and in `applicationWillTerminate`. It only touches `clouddrop-*.multipart`, `clouddrop-drops/` and `clouddrop-captures/`, and it saves any Capture left in `clouddrop-captures/` to Downloads before deleting the folder.
+- Quitting mid-upload skips the `defer` that deletes the multipart body, so `TemporaryFiles.removeLeftovers()` runs at launch and in `applicationWillTerminate`. It only touches `clouddrop-*.multipart`, `clouddrop-drops/` and `clouddrop-captures/`, and it saves any Capture left in `clouddrop-captures/` to Downloads, removing only the folders it emptied.
 
 **Checking credentials: `Uploader.verify`**
 1. `GET /ping` with Basic auth. This proves the key and secret are valid, but **not** that the key may upload.
@@ -288,8 +293,8 @@ After `verify` passes and the key is saved, the settings window runs one search 
 **Unit tests (`make test`)**
 - Add or extend a `@Suite` in `Tests/CloudDropCoreTests/CloudDropCoreTests.swift` for **any change to `CloudDropCore`**.
 - Use parameterized `@Test(arguments:)` for tables of inputs.
-- `CompressingWithFFmpeg` runs the real ffmpeg (an odd-sized test pattern, a non-video file, cancellation) and is skipped on a Mac without it.
-- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), Deletes (the destroy request and its signing and encoding, reading the answer), and Compression (the setting, size checks and messages, names, ffmpeg arguments, progress parsing).
+- `CompressingWithFFmpeg` runs the real ffmpeg (an odd-sized test pattern, 90°/180°/270° rotated videos compared with ffmpeg's own autorotation, a non-video file, cancellation) and is skipped on a Mac without it.
+- They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), Deletes (the destroy request and its signing and encoding, reading the answer), Compression (the setting, size checks and messages, names, ffmpeg arguments, progress parsing, rotation), Capture recovery when Downloads can't be written, the Upload Queue's order with promised files, the rate-limit pause against late answers, the Keychain's update-or-add, settings saves, and files that grow past the Size Limit in the queue.
 
 **App target**
 - It has no unit tests. After touching `StatusController`, `UploadQueue`, `VideoCompression`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
@@ -325,6 +330,8 @@ The app's Last Error text is only in memory. **Ask the user to read the ⚠︎ l
 - **The Keychain prompt** only appears after a rebuild, not on first save, because the app that created the item is trusted automatically. The Link History's fetch at launch reads the Keychain, so after `make install` the prompt appears right away.
 - **Browser drags** aren't officially supported (ADR 0004). If a browser offers a file promise, it may still upload. This is known and accepted; don't add special handling unless the user asks.
 - **The notch:** on the MacBook Pro, menu bar items that don't fit are hidden behind the notch. This is an accepted risk; there's no fallback trigger by design.
+- **SIGTERM** would kill an AppKit app on the spot, skipping `applicationWillTerminate` and orphaning ffmpeg. `AppDelegate` turns it into `NSApp.terminate`, which is what `make quit` relies on. Don't go back to a bare `pkill` in the Makefile.
+- **Never launch a rebuilt CloudDrop to test it** while the user's copy runs: its Keychain read triggers the prompt, and it adds a second icon. Test app-lifecycle changes with a scratch app outside the repo (for the Makefile: `make quit APP_NAME=<scratch name> FFMPEG_PATTERN=<its own pattern>`).
 - **SMAppService** works best when the app lives in `/Applications`, which is why `make install` copies it there.
 
 ## Out of scope (ADR 0004)

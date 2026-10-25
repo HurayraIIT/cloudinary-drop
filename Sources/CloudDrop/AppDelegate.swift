@@ -7,19 +7,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let capturesSavedAtQuitKey = "capturesSavedAtQuit"
 
     private var statusController: StatusController?
+    private var terminationSignal: (any DispatchSourceSignal)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Also catches what a crash or `make install`'s pkill left, which skip applicationWillTerminate.
+        quitOnSIGTERM()
+        // Also catches what a crash or a forced kill left, which skip applicationWillTerminate. Captures it
+        // couldn't save at the last quit are still in their folders, so they're tried again here.
         let defaults = UserDefaults.standard
-        let savedCaptures = TemporaryFiles.removeLeftovers() + defaults.integer(forKey: Self.capturesSavedAtQuitKey)
+        var captures = TemporaryFiles.removeLeftovers()
+        captures.saved += defaults.integer(forKey: Self.capturesSavedAtQuitKey)
         defaults.removeObject(forKey: Self.capturesSavedAtQuitKey)
         NSApp.mainMenu = Self.makeMainMenu()
         LoginItem.enableOnFirstLaunch()
         statusController = StatusController()
-        if savedCaptures > 0 {
-            log.info("Saved \(savedCaptures, privacy: .public) unfinished Captures to Downloads")
-            statusController?.reportCapturesSaved(savedCaptures)
+        if let message = TemporaryFiles.leftoverCapturesMessage(captures) {
+            log.info("Leftover Captures: \(captures.saved, privacy: .public) saved to Downloads, \(captures.unsaved, privacy: .public) couldn't be")
+            statusController?.reportLeftoverCaptures(message)
         }
+    }
+
+    /// `make install` and `make uninstall` send SIGTERM, which would otherwise kill the app on the spot, leaving ffmpeg
+    /// running and skipping applicationWillTerminate. Quitting normally stops ffmpeg and saves waiting Captures.
+    private func quitOnSIGTERM() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated { NSApp.terminate(nil) }
+        }
+        source.resume()
+        terminationSignal = source
     }
 
     /// Quit is immediate (ADR 0004), so an Upload in progress never gets to delete its files,
@@ -27,7 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so it isn't left running, and its partial output is swept away.
     func applicationWillTerminate(_ notification: Notification) {
         statusController?.stop()
-        let saved = TemporaryFiles.removeLeftovers()
+        // Captures that couldn't be saved stay in their folders for the next launch, which reports them.
+        let saved = TemporaryFiles.removeLeftovers().saved
         guard saved > 0 else { return }
         let defaults = UserDefaults.standard
         defaults.set(defaults.integer(forKey: Self.capturesSavedAtQuitKey) + saved, forKey: Self.capturesSavedAtQuitKey)

@@ -1,6 +1,10 @@
 APP_NAME   := CloudDrop
 BUNDLE_ID  := com.hurayraiit.clouddrop
 APP        := build/$(APP_NAME).app
+# How long `make quit` waits for a normal quit before killing the app.
+QUIT_WAIT  := 10
+# ffmpeg compressing for CloudDrop. The [p] stops the pattern matching the shell that runs pkill.
+FFMPEG_PATTERN := ffmpeg.*/clouddro[p]-compressed/
 
 # Swift Testing ships with Command Line Tools but isn't on SwiftPM's search path (ADR 0001).
 DEV_DIR        := $(shell xcode-select -p)
@@ -12,7 +16,7 @@ TEST_FLAGS     := -Xswiftc -F -Xswiftc $(TESTING_FW) \
                   -Xlinker -rpath -Xlinker $(TESTING_FW) \
                   -Xlinker -rpath -Xlinker $(TESTING_LIB)
 
-.PHONY: app test install uninstall clean
+.PHONY: app test quit install uninstall clean
 
 app:
 	swift build -c release --product $(APP_NAME)
@@ -30,17 +34,28 @@ test:
 	[ $$status -eq 0 ] || exit $$status; \
 	echo "$$out" | grep -Eq 'Test run with [1-9][0-9]* tests?' || { echo "make test: no tests ran" >&2; exit 1; }
 
-# pkill returns before the old app has exited. Opening too soon sends a reopen
-# event to the dying process instead of launching the new one (error -600).
-install: app
-	-pkill -x $(APP_NAME)
-	@for i in $$(seq 50); do pgrep -x $(APP_NAME) >/dev/null || break; sleep 0.1; done; sleep 0.5
+# SIGTERM makes the app quit normally, so applicationWillTerminate stops ffmpeg and saves waiting Captures.
+# It's killed only if it hasn't quit within QUIT_WAIT seconds, and then any ffmpeg it left is stopped too;
+# the next launch's sweep saves the Captures. The wait also matters for install: opening the app while the
+# old one is still exiting sends a reopen event to the dying process instead of launching (error -600).
+quit:
+	@pgrep -x $(APP_NAME) >/dev/null || exit 0; \
+	pkill -TERM -x $(APP_NAME); \
+	for i in $$(seq $$(( $(QUIT_WAIT) * 10 ))); do pgrep -x $(APP_NAME) >/dev/null || break; sleep 0.1; done; \
+	if pgrep -x $(APP_NAME) >/dev/null; then \
+		echo "$(APP_NAME) didn't quit within $(QUIT_WAIT) s, killing it" >&2; \
+		pkill -KILL -x $(APP_NAME); \
+		pkill -TERM -f '$(FFMPEG_PATTERN)'; \
+		for i in $$(seq 20); do pgrep -x $(APP_NAME) >/dev/null || break; sleep 0.1; done; \
+	fi; \
+	sleep 0.5
+
+install: app quit
 	rm -rf /Applications/$(APP_NAME).app
 	cp -R $(APP) /Applications/
 	open /Applications/$(APP_NAME).app
 
-uninstall:
-	-pkill -x $(APP_NAME)
+uninstall: quit
 	rm -rf /Applications/$(APP_NAME).app
 
 clean:

@@ -42,6 +42,56 @@ public enum CompressionSetting: Equatable, Sendable {
     }
 }
 
+/// The quarter turn a video needs to be shown upright, from the rotation in its display matrix. The raw value is
+/// `transpose_vt`'s direction.
+public enum Rotation: String, Sendable {
+    case clockwise = "clock"
+    case counterclockwise = "cclock"
+    case halfTurn = "reversal"
+
+    /// `degrees` is ffprobe's `rotation`, counter-clockwise. Nil when it's upright or not a quarter turn.
+    public init?(degrees: Double) {
+        guard degrees.isFinite, abs(degrees) < 3600 else { return nil }
+        switch (Int(degrees.rounded()) % 360 + 360) % 360 {
+        case 90: self = .counterclockwise
+        case 180: self = .halfTurn
+        case 270: self = .clockwise
+        default: return nil
+        }
+    }
+}
+
+/// What ffprobe tells about a video before it's compressed.
+public struct VideoProbe: Equatable, Sendable {
+    /// In seconds, for the progress percentage. Nil when unknown.
+    public var duration: Double?
+    public var rotation: Rotation?
+
+    public init(duration: Double? = nil, rotation: Rotation? = nil) {
+        self.duration = duration
+        self.rotation = rotation
+    }
+
+    static func arguments(for url: URL) -> [String] {
+        ["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream_side_data=rotation",
+         "-of", "default=noprint_wrappers=1", url.path]
+    }
+
+    /// Reads `rotation=-90` and `duration=12.5` lines, in any order.
+    public init(parsing output: String) {
+        self.init()
+        for line in output.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, let value = Double(parts[1]) else { continue }
+            switch parts[0] {
+            case "duration": duration = value
+            case "rotation": rotation = Rotation(degrees: value)
+            default: break
+            }
+        }
+    }
+}
+
 /// Compressing a video before its Upload, with the user's Homebrew ffmpeg (ADR 0008).
 public enum Compression {
     /// A GUI app doesn't get the shell's PATH, so Homebrew's location is looked up directly.
@@ -57,10 +107,12 @@ public enum Compression {
 
     /// The fixed pipeline, tuned for the fanless M1 Air: decoding and scaling on the GPU, then x264 on two threads.
     /// The scale always runs, so odd sizes are rounded down to even ones, which x264 needs; it keeps the size
-    /// otherwise. `-noautorotate` keeps a phone video's rotation as metadata, because rotating needs CPU frames.
-    public static func arguments(input: URL, output: URL, quality: QualityLevel) -> [String] {
+    /// otherwise. ffmpeg's own autorotation needs CPU frames, so `-noautorotate` turns it off, and a phone video's
+    /// rotation is applied on the GPU with `transpose_vt` instead: the output is upright, with no rotation metadata.
+    public static func arguments(input: URL, output: URL, quality: QualityLevel, rotation: Rotation? = nil) -> [String] {
         let fit = "min(1\\,\(maxSide)/max(iw\\,ih))"
-        let scale = "scale_vt=w='trunc(iw*\(fit)/2)*2':h='trunc(ih*\(fit)/2)*2'"
+        let transpose = rotation.map { "transpose_vt=dir=\($0.rawValue)," } ?? ""
+        let scale = "\(transpose)scale_vt=w='trunc(iw*\(fit)/2)*2':h='trunc(ih*\(fit)/2)*2'"
         return [
             "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
             "-noautorotate", "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld",

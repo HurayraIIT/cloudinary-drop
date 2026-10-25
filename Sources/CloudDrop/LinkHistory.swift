@@ -5,10 +5,7 @@ import CloudDropCore
 /// already here at once and a refresh updates it in the background. Nothing is written to disk.
 @MainActor
 final class LinkHistory {
-    enum Problem {
-        case failed(String)
-        case paused(until: Date)
-    }
+    typealias Problem = RefreshStatus.Problem
 
     /// Opening the menu more often than this reuses the last fetch. Both Macs share 500 API calls an hour.
     private static let refreshInterval: TimeInterval = 30
@@ -19,7 +16,7 @@ final class LinkHistory {
     /// False until the first fetch works, so the menu can say it's loading rather than empty.
     private(set) var hasLoaded = false
     private(set) var isFetching = false
-    private var problem: Problem?
+    private var status = RefreshStatus()
 
     var credentials: () -> CloudinaryCredentials? = { nil }
     var onChange: () -> Void = {}
@@ -37,19 +34,15 @@ final class LinkHistory {
     private var search: HistorySearch?
 
     /// What the menu should say under the entries, if anything. A pause that has passed isn't shown.
-    var currentProblem: Problem? {
-        if case let .paused(until) = problem, until <= Date() { return nil }
-        return problem
-    }
+    var currentProblem: Problem? { status.problem() }
 
     /// True while a rate limit is in force. The Usage line's calls count toward the same limit.
-    var isPaused: Bool {
-        if case .paused = currentProblem { true } else { false }
-    }
+    var isPaused: Bool { status.isPaused() }
 
-    /// Pauses refreshes after another caller on the same key hit the rate limit.
+    /// Pauses refreshes after another caller on the same key hit the rate limit. A fetch still running when it
+    /// does doesn't end the pause.
     func pause(until: Date?) {
-        problem = .paused(until: until ?? Date().addingTimeInterval(Self.defaultPause))
+        status.pause(until: until ?? Date().addingTimeInterval(Self.defaultPause))
         onChange()
     }
 
@@ -77,7 +70,7 @@ final class LinkHistory {
     func refresh() {
         guard !isFetching, let credentials = credentials() else { return }
         let now = Date()
-        if case let .paused(until) = problem, now < until { return }
+        if status.isPaused(at: now) { return }
         if let lastFetch, now.timeIntervalSince(lastFetch) < Self.refreshInterval { return }
 
         isFetching = true
@@ -108,7 +101,7 @@ final class LinkHistory {
         thumbnailsLoading = []
         hasLoaded = false
         isFetching = false
-        problem = nil
+        status = RefreshStatus()
         lastFetch = nil
         onChange()
         refresh()
@@ -123,13 +116,13 @@ final class LinkHistory {
             unconfirmed = HistorySearch.stillUnconfirmed(unconfirmed, fetched: list, fetchStartedAt: startedAt)
             deleted = HistorySearch.stillDeleted(deleted, fetched: list, fetchStartedAt: startedAt)
             hasLoaded = true
-            problem = nil
+            status.fetchSucceeded()
         case let .failure(HistoryFetchError.rateLimited(until)):
             log.error("Link History paused: \(String(describing: HistoryFetchError.rateLimited(until: until)), privacy: .public)")
-            problem = .paused(until: until ?? startedAt.addingTimeInterval(Self.defaultPause))
+            status.pause(until: until ?? startedAt.addingTimeInterval(Self.defaultPause))
         case let .failure(error):
             log.error("Link History refresh failed: \(String(describing: error), privacy: .public)")
-            problem = .failed(error.localizedDescription)
+            status.fetchFailed(error.localizedDescription)
         }
         update()
         onChange()

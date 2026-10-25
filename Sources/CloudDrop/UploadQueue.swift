@@ -52,12 +52,12 @@ final class UploadQueue {
     var credentials: () throws -> CloudinaryCredentials = { throw CredentialsError.notSet }
     /// The menu's Compress Videos setting, and whether ffmpeg is installed.
     var compression: () -> CompressionSetting = { .off }
-    /// Each successful Upload, with its thumbnail for images, for the Link History.
-    var onUploaded: (HistoryEntry, NSImage?) -> Void = { _, _ in }
-    /// Each successful Delete, so the Link History can hide it.
-    var onDeleted: (HistoryEntry) -> Void = { _ in }
+    /// Each successful Upload, with its thumbnail for images and the cloud it went to, for the Link History.
+    var onUploaded: (HistoryEntry, NSImage?, _ cloudName: String) -> Void = { _, _, _ in }
+    /// Each successful Delete, with the cloud it was in, so the Link History can hide it.
+    var onDeleted: (HistoryEntry, _ cloudName: String) -> Void = { _, _ in }
 
-    private var pending: [Job] = []
+    private var order = UploadOrder<Job>()
     private var isRunning = false
     private var drainTask: Task<Void, Never>?
     /// Reused across Uploads so they share one URLSession and its connections.
@@ -77,12 +77,25 @@ final class UploadQueue {
         onEvent(.failed)
     }
 
-    /// Checks a dropped file and queues it if it is a Media File within its Size Limit.
-    /// `received` marks a file received from a file promise.
-    func add(fileURL: URL, received: Bool = false) {
-        let origin: Origin = TemporaryFiles.isCapture(fileURL) ? .capture : received ? .received : .userFile
+    /// Keeps a place in the queue for a file a Drop hands over as a file promise, so it keeps its drop order
+    /// however long it takes to arrive. The Compression setting is read now, when the Drop is accepted.
+    func reserve() -> UploadPlace {
+        order.reserve(compression: compression())
+    }
+
+    /// Gives up the place of a promised file that couldn't be received, so the files behind it can go.
+    func release(_ place: UploadPlace, refusing message: String) {
+        order.release(place)
+        refuse(message)
+        startIfNeeded()
+    }
+
+    /// Checks a dropped file and queues it if it is a Media File within its Size Limit: in its reserved `place` for
+    /// a file received from a file promise, and at the end otherwise.
+    func add(fileURL: URL, place: UploadPlace? = nil) {
+        let origin: Origin = TemporaryFiles.isCapture(fileURL) ? .capture : place != nil ? .received : .userFile
         let filename = fileURL.lastPathComponent
-        let compression = compression()
+        let compression = place?.compression ?? compression()
         let result: Result<MediaKind, Refusal>
         if let values = try? fileURL.resourceValues(forKeys: [.contentTypeKey, .fileSizeKey, .isDirectoryKey]) {
             let type = values.isDirectory == true ? nil : values.contentType
@@ -94,29 +107,20 @@ final class UploadQueue {
 
         switch result {
         case let .failure(refusal):
+            if let place { order.release(place) }
             refuse(discard(fileURL, origin: origin, filename: filename, message: refusal.message(compression: compression)))
         case let .success(kind):
-            let uploadURL = origin == .capture ? Self.keep(capture: fileURL, filename: filename) : fileURL
-            pending.append(Job(fileURL: uploadURL, filename: filename, kind: kind, origin: origin, compression: compression))
-            startIfNeeded()
+            // A Capture leaves `TemporaryItems` straight away, because macOS deletes it when the drag ends.
+            let uploadURL = origin == .capture ? TemporaryFiles.keep(capture: fileURL) : fileURL
+            let job = Job(fileURL: uploadURL, filename: filename, kind: kind, origin: origin, compression: compression)
+            if let place { order.fill(place, with: job) } else { order.append(job) }
         }
+        startIfNeeded()
     }
 
-    /// Moves a Capture out of `TemporaryItems` straight away, because macOS deletes it when the drag ends.
-    /// If that fails it's uploaded from where it is, while it lasts.
-    private static func keep(capture fileURL: URL, filename: String) -> URL {
-        let folder = TemporaryFiles.captureFolder()
-        let destination = folder.appendingPathComponent(filename)
-        let fileManager = FileManager.default
-        guard (try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
-              (try? fileManager.moveItem(at: fileURL, to: destination)) != nil
-                || (try? fileManager.copyItem(at: fileURL, to: destination)) != nil
-        else { return fileURL }
-        return destination
-    }
-
-    /// Clears away a file that won't be uploaded, and returns the Last Error `message`, saying so when
-    /// a Capture was saved to Downloads, as `cd-<filename>`.
+    /// Clears away a file that won't be uploaded, and returns the Last Error `message`, saying whether
+    /// a Capture was saved to Downloads, as `cd-<filename>`. One that couldn't be stays in its capture folder,
+    /// for the sweep at quit or the next launch.
     private func discard(_ fileURL: URL, origin: Origin, filename: String, message: String) -> String {
         switch origin {
         case .userFile:
@@ -125,7 +129,8 @@ final class UploadQueue {
             TemporaryFiles.remove(fileURL)
             return message
         case .capture:
-            return Self.saveToDownloads(fileURL, as: filename) ? TemporaryFiles.mentioningCaptureSaved(message) : message
+            return Self.saveToDownloads(fileURL, as: filename)
+                ? TemporaryFiles.mentioningCaptureSaved(message) : TemporaryFiles.mentioningCaptureNotSaved(message)
         }
     }
 
@@ -163,7 +168,7 @@ final class UploadQueue {
             do {
                 let outcome = try await uploader.delete(publicID: entry.publicID, kind: entry.kind)
                 log.info("Deleted \(entry.publicID, privacy: .public)\(outcome == .alreadyGone ? " (it was already gone)" : "", privacy: .public)")
-                onDeleted(entry)
+                onDeleted(entry, credentials.cloudName)
                 onEvent(.succeeded)
             } catch {
                 log.error("Delete failed for \(entry.publicID, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -174,7 +179,7 @@ final class UploadQueue {
     }
 
     private func startIfNeeded() {
-        guard !isRunning, !pending.isEmpty else { return }
+        guard !isRunning, order.hasNext else { return }
         isRunning = true
         drainTask = Task { await drain() }
     }
@@ -186,8 +191,8 @@ final class UploadQueue {
     }
 
     private func drain() async {
-        while !pending.isEmpty, !Task.isCancelled {
-            let job = pending.removeFirst()
+        // Stops at a place whose file is still arriving; filling it starts the queue again.
+        while !Task.isCancelled, let job = order.next() {
             if job.kind == .video, case let .on(quality) = job.compression {
                 await compressAndUpload(job, quality: quality)
             } else {
@@ -201,6 +206,14 @@ final class UploadQueue {
 
     /// `note` becomes the Last Error once the Upload has succeeded.
     private func uploadOriginal(_ job: Job, note: String? = nil) async {
+        // It may have grown while it waited in the queue, e.g. a recording still being written.
+        let byteCount = Self.byteCount(of: job.fileURL)
+        guard let byteCount, byteCount <= job.kind.sizeLimit else {
+            let refusal = byteCount.map { Refusal.tooLarge(filename: job.filename, kind: job.kind, byteCount: $0) }
+                ?? .unreadable(filename: job.filename)
+            return refuse(discard(job.fileURL, origin: job.origin, filename: job.filename,
+                                  message: refusal.message(compression: job.compression)))
+        }
         do {
             try await upload(job.fileURL, as: job.filename, of: job)
             if job.origin != .userFile { TemporaryFiles.remove(job.fileURL) }
@@ -264,22 +277,29 @@ final class UploadQueue {
     private func refuseCompressed(_ job: Job, output: URL, byteCount: Int64?, quality: QualityLevel) {
         activity = nil
         var saved = false
+        var captureLeft = false
         if job.origin == .capture {
             saved = Self.saveToDownloads(job.fileURL, as: Compression.downloadsName(job.filename, compressed: false))
+            captureLeft = !saved
         } else if job.origin == .received {
             TemporaryFiles.remove(job.fileURL)
         }
         if Self.saveToDownloads(output, as: Compression.downloadsName(job.filename, compressed: true)) { saved = true }
         let refusal = byteCount.map { Refusal.stillTooLarge(filename: job.filename, byteCount: $0, quality: quality) }
             ?? .unreadable(filename: job.filename)
-        refuse(saved ? TemporaryFiles.mentioningCaptureSaved(refusal.message) : refusal.message)
+        let message = saved ? TemporaryFiles.mentioningCaptureSaved(refusal.message) : refusal.message
+        refuse(captureLeft ? TemporaryFiles.mentioningCaptureNotSaved(message) : message)
     }
 
     private func fail(_ job: Job, _ error: any Error) {
         log.error("Upload failed for \(job.filename, privacy: .public): \(String(describing: error), privacy: .public)")
         activity = nil
-        lastError = discard(job.fileURL, origin: job.origin, filename: job.filename,
-                            message: "\(job.filename): \(error.localizedDescription)")
+        let message = if case let UploadError.overSizeLimit(byteCount) = error {
+            Refusal.tooLarge(filename: job.filename, kind: job.kind, byteCount: byteCount).message(compression: job.compression)
+        } else {
+            "\(job.filename): \(error.localizedDescription)"
+        }
+        lastError = discard(job.fileURL, origin: job.origin, filename: job.filename, message: message)
         onEvent(.failed)
     }
 
@@ -302,6 +322,7 @@ final class UploadQueue {
             kind: job.kind,
             publicID: publicID,
             displayName: filename,
+            sizeLimit: job.kind.sizeLimit,
             progress: { [weak self] fraction in
                 Task { @MainActor in self?.report(.uploading(fraction), step: number) }
             })
@@ -311,7 +332,8 @@ final class UploadQueue {
         NSWorkspace.shared.open(link)
         let thumbnail = job.kind == .image ? await Self.thumbnail(of: fileURL) : nil
         onUploaded(HistoryEntry(publicID: file.publicID, kind: job.kind, filename: filename,
-                                uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount), thumbnail)
+                                uploadedAt: file.createdAt ?? Date(), shareLink: link, byteCount: file.byteCount),
+                   thumbnail, credentials.cloudName)
         activity = nil
         onEvent(.succeeded)
     }

@@ -24,18 +24,24 @@ public enum Compressor {
     /// Cancelling the task stops ffmpeg and throws `CancellationError`.
     public static func compress(_ input: URL, to output: URL, quality: QualityLevel, ffmpeg: URL = Compression.ffmpegURL,
                                 progress: @escaping @Sendable (Double) -> Void) async throws {
-        let reader = CompressionProgress(duration: await duration(of: input)).map { ProgressReader($0, report: progress) }
-        try await run(ffmpeg, Compression.arguments(input: input, output: output, quality: quality)) { chunk in
+        let probe = await probe(input)
+        let reader = CompressionProgress(duration: probe.duration).map { ProgressReader($0, report: progress) }
+        let arguments = Compression.arguments(input: input, output: output, quality: quality, rotation: probe.rotation)
+        try await run(ffmpeg, arguments) { chunk in
             reader?.read(chunk)
         }
     }
 
+    /// The video's length and rotation. Both are unknown when ffprobe is missing or can't tell.
+    static func probe(_ url: URL, ffprobe: URL = Compression.ffprobeURL) async -> VideoProbe {
+        let output = Collected()
+        guard (try? await run(ffprobe, VideoProbe.arguments(for: url), onOutput: output.append)) != nil else { return VideoProbe() }
+        return VideoProbe(parsing: output.text)
+    }
+
     /// The video's length in seconds, or nil when ffprobe is missing or can't tell.
     static func duration(of url: URL, ffprobe: URL = Compression.ffprobeURL) async -> Double? {
-        let output = Collected()
-        let arguments = ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", url.path]
-        guard (try? await run(ffprobe, arguments, onOutput: output.append)) != nil else { return nil }
-        return Double(output.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        await probe(url, ffprobe: ffprobe).duration
     }
 
     static func run(_ executable: URL, _ arguments: [String], onOutput: @escaping @Sendable (Data) -> Void) async throws {

@@ -4,6 +4,7 @@ Screen recordings often go over the Free plan's 100 MB video Size Limit. A 5-min
 
 The encoder is the user's Homebrew ffmpeg with libx264. It isn't bundled, and the app never installs it. Without ffmpeg, or with Compression turned off in the menu, videos are handled exactly as before. The settings are tuned for the fanless 8 GB M1 Air, the main Mac:
 - hardware decoding, and scaling on the GPU (`scale_vt`) only when a recording doesn't fit within 1920×1920, rounded down to even sizes
+- a phone video's rotation turned on the GPU too (`transpose_vt`), so the output is upright with no rotation metadata. ffmpeg's own autorotation needs CPU frames, so it's off (`-noautorotate`); with ffmpeg 8 that alone drops the rotation, and a portrait video played sideways
 - preset `veryfast`, `-threads 2`, at most 30 fps, and 96 kbps AAC audio
 - the CRF comes from the menu's Quality Level: 22 by default, or 24 or 26
 

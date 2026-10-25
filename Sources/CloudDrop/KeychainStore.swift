@@ -61,12 +61,19 @@ enum KeychainStore {
         return CloudinaryCredentials(parsing: text)
     }
 
+    /// Updates the saved Cloudinary URL in place, or adds it when there's none, so a failure keeps the old one.
     static func save(_ credentials: CloudinaryCredentials) throws {
-        SecItemDelete(baseQuery as CFDictionary)
-        var item = baseQuery
-        item[kSecValueData as String] = Data(credentials.urlString.utf8)
-        item[kSecAttrLabel as String] = "CloudDrop Cloudinary URL"
-        let status = SecItemAdd(item as CFDictionary, nil)
+        let data = Data(credentials.urlString.utf8)
+        let status = KeychainWrite.save(
+            update: {
+                SecItemUpdate(baseQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            },
+            add: {
+                var item = baseQuery
+                item[kSecValueData as String] = data
+                item[kSecAttrLabel as String] = "CloudDrop Cloudinary URL"
+                return SecItemAdd(item as CFDictionary, nil)
+            })
         guard status == errSecSuccess else { throw Failure(status: status) }
     }
 }

@@ -37,32 +37,74 @@ public enum TemporaryFiles: Sendable {
         return path.contains("/TemporaryItems/") || path.contains("/\(capturesFolderName)/")
     }
 
+    /// What the sweep did with the Captures it found.
+    public struct LeftoverCaptures: Equatable, Sendable {
+        public var saved = 0
+        /// Captures that couldn't be saved to Downloads. They stay where they are and are tried again at the next
+        /// launch or quit, since each is the only copy.
+        public var unsaved = 0
+    }
+
     /// Removes multipart bodies, received Drop files and compressed videos, and saves any Capture still waiting
     /// to Downloads.
     /// Quitting mid-upload skips the `defer` that normally deletes a body, and a video's body can be 100 MB.
-    /// Returns how many Captures were saved.
+    /// A capture folder is only removed once it's empty, so a Capture that couldn't be saved is never deleted.
     @discardableResult
     public static func removeLeftovers(in directory: URL = FileManager.default.temporaryDirectory,
-                                       downloads: URL = downloadsFolder) -> Int {
+                                       downloads: URL = downloadsFolder) -> LeftoverCaptures {
         let fileManager = FileManager.default
         let captures = directory.appendingPathComponent(capturesFolderName)
-        var saved = 0
+        var result = LeftoverCaptures()
         for folder in (try? fileManager.contentsOfDirectory(at: captures, includingPropertiesForKeys: nil)) ?? [] {
             for file in (try? fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
-                if saveToDownloads(file, in: downloads) != nil { saved += 1 }
+                if saveToDownloads(file, in: downloads) != nil { result.saved += 1 } else { result.unsaved += 1 }
             }
+            removeIfEmpty(folder)
         }
+        if isEmpty(captures) { try? fileManager.removeItem(at: captures) }
         let names = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
-        for name in names where [dropsFolderName, capturesFolderName, compressedFolderName].contains(name)
+        for name in names where [dropsFolderName, compressedFolderName].contains(name)
             || (name.hasPrefix(prefix) && name.hasSuffix(".multipart")) {
             try? fileManager.removeItem(at: directory.appendingPathComponent(name))
         }
-        return saved
+        return result
+    }
+
+    /// The Last Error after the sweep at launch: Captures left by a quit or crash that were saved to Downloads,
+    /// and any that couldn't be. Nil when there were none.
+    public static func leftoverCapturesMessage(_ captures: LeftoverCaptures) -> String? {
+        switch (captures.saved, captures.unsaved) {
+        case (0, 0): nil
+        case let (saved, 0): capturesSavedMessage(count: saved)
+        case let (0, unsaved):
+            "Couldn't save \(unsaved) unfinished Capture\(unsaved == 1 ? "" : "s") to Downloads, will try again at next launch"
+        case let (saved, unsaved):
+            addingSentence("Couldn't save \(unsaved) more, will try again at next launch", to: capturesSavedMessage(count: saved))
+        }
+    }
+
+    /// Moves a Capture out of `TemporaryItems` into its own capture folder straight away, because macOS deletes it
+    /// when the drag ends. Returns where it is now: where it was if it couldn't be moved or copied, while it lasts.
+    public static func keep(capture fileURL: URL, in directory: URL = FileManager.default.temporaryDirectory) -> URL {
+        let folder = captureFolder(in: directory)
+        let destination = folder.appendingPathComponent(fileURL.lastPathComponent)
+        let fileManager = FileManager.default
+        guard (try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil,
+              (try? fileManager.moveItem(at: fileURL, to: destination)) != nil
+                || (try? fileManager.copyItem(at: fileURL, to: destination)) != nil
+        else { return fileURL }
+        return destination
     }
 
     /// A Last Error that also says the Capture it's about was saved to Downloads.
     public static func mentioningCaptureSaved(_ message: String) -> String {
         message + (message.hasSuffix(".") ? " " : ". ") + "Saved to Downloads."
+    }
+
+    /// A Last Error that also says the Capture it's about couldn't be saved to Downloads. It stays in its capture
+    /// folder, and the sweep at quit or the next launch tries again.
+    public static func mentioningCaptureNotSaved(_ message: String) -> String {
+        addingSentence("Couldn't save it to Downloads.", to: message)
     }
 
     /// The Last Error after Captures left by a quit or crash were saved to Downloads.
@@ -111,12 +153,20 @@ public enum TemporaryFiles: Sendable {
         return destination
     }
 
-    /// Only ever a per-file folder inside `clouddrop-drops` or `clouddrop-captures`, never anything of the user's.
     private static func removeFolderIfEmpty(of fileURL: URL) {
-        let folder = fileURL.deletingLastPathComponent()
+        removeIfEmpty(fileURL.deletingLastPathComponent())
+    }
+
+    /// Only ever a per-file folder inside `clouddrop-drops` or `clouddrop-captures`, never anything of the user's.
+    private static func removeIfEmpty(_ folder: URL) {
         guard [dropsFolderName, capturesFolderName].contains(folder.deletingLastPathComponent().lastPathComponent),
-              ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? ["?"]).isEmpty
+              isEmpty(folder)
         else { return }
         try? FileManager.default.removeItem(at: folder)
+    }
+
+    /// False when the folder can't be read, so it's never removed by mistake.
+    private static func isEmpty(_ folder: URL) -> Bool {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? ["?"]).isEmpty
     }
 }

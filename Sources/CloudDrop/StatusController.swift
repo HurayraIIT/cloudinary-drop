@@ -49,13 +49,17 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         }
         queue.compression = { VideoCompression.setting }
         queue.onEvent = { [weak self] event in self?.handle(event) }
-        queue.onUploaded = { [weak self] entry, thumbnail in
-            self?.history.add(entry, thumbnail: thumbnail)
-            self?.usage.countsChanged()
+        // An Upload or Delete that finishes after the Cloudinary URL changed to another cloud belongs to the old
+        // one, so it's kept out of the new Link History. Its Share Link was still opened and copied.
+        queue.onUploaded = { [weak self] entry, thumbnail, cloudName in
+            guard let self, self.isCurrentCloud(cloudName) else { return }
+            self.history.add(entry, thumbnail: thumbnail)
+            self.usage.countsChanged()
         }
-        queue.onDeleted = { [weak self] entry in
-            self?.history.remove(entry)
-            self?.usage.countsChanged()
+        queue.onDeleted = { [weak self] entry, cloudName in
+            guard let self, self.isCurrentCloud(cloudName) else { return }
+            self.history.remove(entry)
+            self.usage.countsChanged()
         }
         history.credentials = { [weak self] in try? self?.credentials() }
         history.onChange = { [weak self] in self?.historyChanged() }
@@ -80,6 +84,11 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         return credentials
     }
 
+    private func isCurrentCloud(_ cloudName: String) -> Bool {
+        guard case let .success(current?) = storedCredentials else { return false }
+        return current.cloudName == cloudName
+    }
+
     private func readCredentials() {
         do {
             storedCredentials = .success(try KeychainStore.load())
@@ -95,9 +104,9 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         queue.stop()
     }
 
-    /// Captures saved to Downloads by the cleanup at the last quit or at this launch.
-    func reportCapturesSaved(_ count: Int) {
-        queue.refuse(TemporaryFiles.capturesSavedMessage(count: count))
+    /// Captures saved to Downloads by the cleanup at the last quit or at this launch, and any it couldn't save.
+    func reportLeftoverCaptures(_ message: String) {
+        queue.refuse(message)
     }
 
     // MARK: Drops
@@ -132,10 +141,14 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         do throws(CredentialsError) {
             _ = try credentials()
         } catch {
-            // A Capture is the only copy, so it goes to Downloads rather than vanish with the drag.
-            let saved = fileURLs.filter(TemporaryFiles.isCapture).compactMap { TemporaryFiles.saveToDownloads($0) }
-            let message = error.localizedDescription
-            queue.refuse(saved.isEmpty ? message : TemporaryFiles.mentioningCaptureSaved(message))
+            // A Capture is the only copy, so it goes to Downloads rather than vanish with the drag. One that can't be
+            // saved waits in its capture folder for the sweep at quit or the next launch.
+            let captures = fileURLs.filter(TemporaryFiles.isCapture).map { TemporaryFiles.keep(capture: $0) }
+            let saved = captures.compactMap { TemporaryFiles.saveToDownloads($0) }
+            var message = error.localizedDescription
+            if !saved.isEmpty { message = TemporaryFiles.mentioningCaptureSaved(message) }
+            if saved.count < captures.count { message = TemporaryFiles.mentioningCaptureNotSaved(message) }
+            queue.refuse(message)
             if case .notSet = error { showSettings() }
             return true
         }
@@ -163,18 +176,20 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     /// Each promise gets its own folder, so a failed one only removes its own file, never the files from
-    /// the same Drop that are waiting to upload.
+    /// the same Drop that are waiting to upload. Each also gets its place in the Upload Queue now, so the
+    /// files keep their drop order whichever arrives first.
     private func receive(_ promises: [NSFilePromiseReceiver]) {
         for promise in promises {
+            let place = queue.reserve()
             let folder = TemporaryFiles.dropFolder()
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: promiseQueue) { [weak self] url, error in
                 Task { @MainActor in
                     if let error {
                         TemporaryFiles.remove(url)
-                        self?.queue.refuse("Couldn't receive the dropped file: \(error.localizedDescription)")
+                        self?.queue.release(place, refusing: "Couldn't receive the dropped file: \(error.localizedDescription)")
                     } else {
-                        self?.queue.add(fileURL: url, received: true)
+                        self?.queue.add(fileURL: url, place: place)
                     }
                 }
             }

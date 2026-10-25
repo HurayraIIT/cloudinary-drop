@@ -8,6 +8,8 @@ public enum UploadError: LocalizedError, CustomStringConvertible, Equatable, Sen
     /// Cloudinary already has a file at this public_id. Uploads never overwrite, so an older Share Link keeps its file.
     case nameTaken(publicID: String)
     case unexpectedResponse(Int)
+    /// The file grew past its Size Limit after it was dropped. `byteCount` is its size by the time it was noticed.
+    case overSizeLimit(byteCount: Int64)
 
     public var errorDescription: String? {
         switch self {
@@ -15,6 +17,7 @@ public enum UploadError: LocalizedError, CustomStringConvertible, Equatable, Sen
         case .notAllowedToUpload: "This API key isn't allowed to upload (it lacks Cloudinary's \"create\" permission). Use a key with upload access."
         case .nameTaken: "Its random name was already taken, drop it again"
         case let .unexpectedResponse(status): "Cloudinary answered with HTTP \(status)"
+        case .overSizeLimit: "It's grown past the Size Limit"
         }
     }
 
@@ -80,12 +83,14 @@ public struct Uploader: Sendable {
     }
 
     /// Uploads one Media File. `displayName` is the name the Cloudinary console shows, since the
-    /// public_id no longer carries the original filename.
+    /// public_id no longer carries the original filename. A file that has grown past `sizeLimit` since it was
+    /// dropped throws `UploadError.overSizeLimit` before anything is sent.
     public func upload(
         fileURL: URL,
         kind: MediaKind,
         publicID: String,
         displayName: String,
+        sizeLimit: Int64,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> UploadedFile {
         var params = [
@@ -101,7 +106,7 @@ public struct Uploader: Sendable {
         let boundary = "CloudDrop-\(UUID().uuidString)"
         let bodyURL = TemporaryFiles.multipartBody()
         defer { try? FileManager.default.removeItem(at: bodyURL) }
-        try writeMultipartBody(to: bodyURL, boundary: boundary, params: params, fileURL: fileURL)
+        try Self.writeMultipartBody(to: bodyURL, boundary: boundary, params: params, fileURL: fileURL, sizeLimit: sizeLimit)
 
         var request = URLRequest(url: URL(string: "https://api.cloudinary.com/v1_1/\(credentials.cloudName)/\(kind.rawValue)/upload")!)
         request.httpMethod = "POST"
@@ -178,8 +183,10 @@ public struct Uploader: Sendable {
         return (json?["error"] as? [String: Any])?["message"] as? String
     }
 
-    /// Streams the file into a multipart body on disk so large videos never sit in memory.
-    private func writeMultipartBody(to bodyURL: URL, boundary: String, params: [String: String], fileURL: URL) throws {
+    /// Streams the file into a multipart body on disk so large videos never sit in memory. It stops as soon as
+    /// more than `sizeLimit` bytes have been copied, for a file still being written to after it was dropped.
+    static func writeMultipartBody(to bodyURL: URL, boundary: String, params: [String: String], fileURL: URL,
+                                   sizeLimit: Int64) throws {
         FileManager.default.createFile(atPath: bodyURL.path, contents: nil)
         let output = try FileHandle(forWritingTo: bodyURL)
         defer { try? output.close() }
@@ -194,11 +201,17 @@ public struct Uploader: Sendable {
         defer { try? input.close() }
         // Without the pool, every 1 MB chunk stays alive until the upload finishes.
         var copying = true
+        var copied: Int64 = 0
         while copying {
             try autoreleasepool {
                 guard let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty else {
                     copying = false
                     return
+                }
+                copied += Int64(chunk.count)
+                guard copied <= sizeLimit else {
+                    let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
+                    throw UploadError.overSizeLimit(byteCount: max(copied, size))
                 }
                 try output.write(contentsOf: chunk)
             }

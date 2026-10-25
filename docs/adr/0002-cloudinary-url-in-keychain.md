@@ -9,4 +9,4 @@ CloudDrop needs the account's API secret to sign uploads. An app launched from F
 
 ## Consequences
 
-Builds are signed ad-hoc, so each rebuild changes the app's identity and macOS asks once more for Keychain access ("Always Allow"). This was accepted over maintaining a self-signed code-signing certificate on each Mac.
+Builds are signed ad-hoc, so each rebuild changes the app's identity and macOS asks once more for Keychain access ("Always Allow"). This was accepted over maintaining a self-signed code-signing certificate on each Mac. Saving a new Cloudinary URL updates the Keychain item in place rather than deleting and re-adding it, so a failed save keeps the working URL; after a rebuild, that save may bring the prompt up once.

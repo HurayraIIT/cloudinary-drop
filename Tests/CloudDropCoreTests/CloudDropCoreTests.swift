@@ -296,6 +296,33 @@ import UniformTypeIdentifiers
             #expect(joined.contains(expected), "missing \(expected)")
         }
         #expect(joined.contains("scale_vt=w='trunc(iw*min(1\\,1920/max(iw\\,ih))/2)*2':h='trunc(ih*min(1\\,1920/max(iw\\,ih))/2)*2'"))
+        #expect(!joined.contains("transpose"))
+    }
+
+    /// The turn happens on the GPU, before the scale, so the fit to 1920 applies to the upright frame.
+    @Test func aRotatedVideoIsTurnedOnTheGPU() {
+        let joined = Compression.arguments(input: URL(fileURLWithPath: "/in/rec.mov"), output: URL(fileURLWithPath: "/out/x.mp4"),
+                                           quality: .crf22, rotation: .clockwise).joined(separator: " ")
+        #expect(joined.contains("-noautorotate"))
+        #expect(joined.contains("-vf transpose_vt=dir=clock,scale_vt="))
+    }
+
+    @Test(arguments: [(90.0, Rotation.counterclockwise), (-90, .clockwise), (270, .clockwise), (180, .halfTurn),
+                      (-180, .halfTurn), (-270, .counterclockwise), (450, .counterclockwise)])
+    func quarterTurnsAreRecognised(degrees: Double, expected: Rotation) {
+        #expect(Rotation(degrees: degrees) == expected)
+    }
+
+    @Test(arguments: [0.0, 360, 45, -30, .nan, .infinity])
+    func otherAnglesAreLeftAlone(degrees: Double) {
+        #expect(Rotation(degrees: degrees) == nil)
+    }
+
+    @Test func probeReadsDurationAndRotation() {
+        #expect(VideoProbe(parsing: "rotation=-90\nduration=12.500000\n") == VideoProbe(duration: 12.5, rotation: .clockwise))
+        #expect(VideoProbe(parsing: "duration=3.0\n") == VideoProbe(duration: 3))
+        #expect(VideoProbe(parsing: "duration=N/A\n") == VideoProbe())
+        #expect(VideoProbe(parsing: "") == VideoProbe())
     }
 
     @Test func progressReadsSplitChunks() throws {
@@ -344,6 +371,55 @@ import UniformTypeIdentifiers
         let description = String(decoding: probe.all.reduce(Data(), +), as: UTF8.self)
         #expect(description.trimmingCharacters(in: .whitespacesAndNewlines) == "h264,776,1034,30/1")
         #expect(reported.all.last.map { $0 > 0.9 } == true)
+    }
+
+    /// A phone video is stored sideways with a rotation in its display matrix. The compressed one must show the
+    /// same picture upright: its size is the displayed size, it has no rotation left to apply twice, and it matches
+    /// what ffmpeg's own (CPU) autorotation makes of the original.
+    @Test(arguments: [90, 180, 270])
+    func keepsTheDisplayedOrientation(degrees: Int) async throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let upright = try await makeVideo(in: directory, seconds: 1, size: "320x240")
+        let rotated = directory.appendingPathComponent("rotated.mov")
+        try await Compressor.run(Compression.ffmpegURL, [
+            "-nostdin", "-loglevel", "error", "-display_rotation", "\(degrees)", "-i", upright.path, "-c", "copy", rotated.path,
+        ]) { _ in }
+        let reference = directory.appendingPathComponent("reference.mp4")
+        try await Compressor.run(Compression.ffmpegURL, [
+            "-nostdin", "-loglevel", "error", "-i", rotated.path, "-fpsmax", "30", "-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p",
+            reference.path,
+        ]) { _ in }
+        let output = directory.appendingPathComponent("out.mp4")
+
+        try await Compressor.compress(rotated, to: output, quality: .crf22) { _ in }
+
+        let stream = try await probeText(output, ["-show_entries", "stream=width,height:stream_side_data=rotation",
+                                                  "-of", "default=noprint_wrappers=1"])
+        #expect(stream == (degrees == 180 ? "width=320\nheight=240" : "width=240\nheight=320"))
+        let psnr = try await lowestPSNR(output, against: reference)
+        #expect(psnr > 30, "PSNR \(psnr) dB against the autorotated original")
+    }
+
+    private func probeText(_ video: URL, _ arguments: [String]) async throws -> String {
+        let output = Recorded<Data>()
+        try await Compressor.run(Compression.ffprobeURL, ["-v", "error", "-select_streams", "v:0"] + arguments + [video.path]) {
+            output.add($0)
+        }
+        return String(decoding: output.all.reduce(Data(), +), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The lowest per-frame PSNR, from ffmpeg's psnr filter. Pictures turned the wrong way score around 6 dB.
+    private func lowestPSNR(_ video: URL, against reference: URL) async throws -> Double {
+        let output = Recorded<Data>()
+        try await Compressor.run(Compression.ffmpegURL, [
+            "-nostdin", "-loglevel", "error", "-i", video.path, "-i", reference.path, "-lavfi", "psnr=stats_file=-", "-f", "null", "-",
+        ]) { output.add($0) }
+        let lines = String(decoding: output.all.reduce(Data(), +), as: UTF8.self).split(separator: "\n")
+        let values = lines.compactMap { line in
+            line.split(separator: " ").first { $0.hasPrefix("psnr_avg:") }.flatMap { Double($0.dropFirst("psnr_avg:".count)) }
+        }
+        return values.min() ?? 0
     }
 
     @Test func aFileThatIsntAVideoFails() async throws {
@@ -407,7 +483,7 @@ private final class Recorded<Value: Sendable>: Sendable {
             try write("x", to: file)
         }
 
-        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: downloads) == 0)
+        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: downloads) == .init())
 
         #expect(try fileManager.contentsOfDirectory(atPath: directory.path).sorted() == kept.sorted())
         // A file received from a file promise isn't a Capture: its original still exists, so it isn't saved.
@@ -422,10 +498,62 @@ private final class Recorded<Value: Sendable>: Sendable {
         try write("1", to: TemporaryFiles.captureFolder(in: directory).appendingPathComponent("Screen Recording.mov"))
         try write("2", to: TemporaryFiles.captureFolder(in: directory).appendingPathComponent("Screenshot.png"))
 
-        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: downloads) == 2)
+        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: downloads) == .init(saved: 2, unsaved: 0))
 
         #expect(try fileManager.contentsOfDirectory(atPath: downloads.path).sorted() == ["cd-Screen Recording.mov", "cd-Screenshot.png"])
         #expect(!fileManager.fileExists(atPath: directory.appendingPathComponent("clouddrop-captures").path))
+    }
+
+    /// Downloads here is a file, so nothing can be saved into it, as when the Downloads permission is denied.
+    @Test func aCaptureThatCantBeSavedIsKeptAndSavedOnALaterSweep() throws {
+        let fileManager = FileManager.default
+        let (directory, downloads) = try scratch()
+        defer { try? fileManager.removeItem(at: directory) }
+        let blocked = directory.appendingPathComponent("NotAFolder")
+        try write("x", to: blocked)
+        let capture = TemporaryFiles.captureFolder(in: directory).appendingPathComponent("Screenshot.png")
+        try write("only copy", to: capture)
+        let body = TemporaryFiles.multipartBody(in: directory)
+        try write("x", to: body)
+
+        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: blocked) == .init(saved: 0, unsaved: 1))
+        #expect(try String(contentsOf: capture, encoding: .utf8) == "only copy")
+        #expect(!fileManager.fileExists(atPath: body.path))
+
+        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: downloads) == .init(saved: 1, unsaved: 0))
+        #expect(try String(contentsOf: downloads.appendingPathComponent("cd-Screenshot.png"), encoding: .utf8) == "only copy")
+        #expect(!fileManager.fileExists(atPath: directory.appendingPathComponent("clouddrop-captures").path))
+    }
+
+    @Test func emptyCaptureFoldersAreRemovedAndOthersKept() throws {
+        let fileManager = FileManager.default
+        let (directory, _) = try scratch()
+        defer { try? fileManager.removeItem(at: directory) }
+        let empty = TemporaryFiles.captureFolder(in: directory)
+        try fileManager.createDirectory(at: empty, withIntermediateDirectories: true)
+        let kept = TemporaryFiles.captureFolder(in: directory).appendingPathComponent("rec.mov")
+        try write("only copy", to: kept)
+        let blocked = directory.appendingPathComponent("NotAFolder")
+        try write("x", to: blocked)
+
+        #expect(TemporaryFiles.removeLeftovers(in: directory, downloads: blocked).unsaved == 1)
+        #expect(!fileManager.fileExists(atPath: empty.path))
+        #expect(fileManager.fileExists(atPath: kept.path))
+    }
+
+    @Test func keepingACaptureMovesItOutOfTemporaryItems() throws {
+        let fileManager = FileManager.default
+        let (directory, _) = try scratch()
+        defer { try? fileManager.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("TemporaryItems/NSIRD_screencaptureui_test/Screenshot.png")
+        try write("bytes", to: original)
+
+        let kept = TemporaryFiles.keep(capture: original, in: directory)
+
+        #expect(kept.lastPathComponent == "Screenshot.png")
+        #expect(kept.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "clouddrop-captures")
+        #expect(!fileManager.fileExists(atPath: original.path))
+        #expect(TemporaryFiles.isCapture(kept))
     }
 
     @Test func savesCaptureWithPrefixAndRemovesItsFolder() throws {
@@ -552,6 +680,21 @@ private final class Recorded<Value: Sendable>: Sendable {
     @Test func capturesSavedMessage() {
         #expect(TemporaryFiles.capturesSavedMessage(count: 1) == "Saved 1 unfinished Capture to Downloads")
         #expect(TemporaryFiles.capturesSavedMessage(count: 3) == "Saved 3 unfinished Captures to Downloads")
+    }
+
+    @Test func leftoverCapturesMessageNeverClaimsAnUnsavedOneWasSaved() {
+        typealias Captures = TemporaryFiles.LeftoverCaptures
+        #expect(TemporaryFiles.leftoverCapturesMessage(Captures()) == nil)
+        #expect(TemporaryFiles.leftoverCapturesMessage(Captures(saved: 2, unsaved: 0)) == "Saved 2 unfinished Captures to Downloads")
+        #expect(TemporaryFiles.leftoverCapturesMessage(Captures(saved: 0, unsaved: 1))
+            == "Couldn't save 1 unfinished Capture to Downloads, will try again at next launch")
+        #expect(TemporaryFiles.leftoverCapturesMessage(Captures(saved: 2, unsaved: 1))
+            == "Saved 2 unfinished Captures to Downloads. Couldn't save 1 more, will try again at next launch")
+    }
+
+    @Test func lastErrorSaysTheCaptureCouldntBeSaved() {
+        #expect(TemporaryFiles.mentioningCaptureNotSaved("rec.mov is 150 MB, video limit is 100 MB")
+            == "rec.mov is 150 MB, video limit is 100 MB. Couldn't save it to Downloads.")
     }
 }
 
@@ -725,6 +868,46 @@ private final class Recorded<Value: Sendable>: Sendable {
         #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 205)) == deleted)
         #expect(HistorySearch.stillDeleted(deleted, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 205)).isEmpty)
         #expect(HistorySearch.stillDeleted(deleted, fetched: listed, fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
+    }
+
+    /// Upload, then Delete before search lists it: a fetch that started before the Delete doesn't list it either,
+    /// but that says nothing about the Delete. The next fetch's stale results list it, and it must stay hidden.
+    @Test func aFetchFromBeforeTheDeleteNeverEndsTheHiding() {
+        var deleted = ["d/gone": Date(timeIntervalSince1970: 200)]
+        deleted = HistorySearch.stillDeleted(deleted, fetched: [], fetchStartedAt: Date(timeIntervalSince1970: 195))
+        #expect(deleted.keys.sorted() == ["d/gone"])
+        let stale = [entry("d/gone", at: 190), entry("d/other", at: 100)]
+        deleted = HistorySearch.stillDeleted(deleted, fetched: stale, fetchStartedAt: Date(timeIntervalSince1970: 210))
+        #expect(HistorySearch.combine(fetched: stale, unconfirmed: [], deleted: Set(deleted.keys)).map(\.publicID) == ["d/other"])
+        // The grace period still ends it.
+        #expect(HistorySearch.stillDeleted(deleted, fetched: stale, fetchStartedAt: Date(timeIntervalSince1970: 200 + 121)).isEmpty)
+    }
+
+    @Test func aRateLimitPauseOutlastsAnswersToFetchesStartedBeforeIt() {
+        let now = Date(timeIntervalSince1970: 1000)
+        let resets = now.addingTimeInterval(600)
+        var status = RefreshStatus()
+        // The Usage line hits the rate limit while a Link History fetch is still running.
+        status.pause(until: resets)
+        status.fetchSucceeded()
+        #expect(status.isPaused(at: now))
+        #expect(status.problem(at: now) == .paused(until: resets))
+        // A later, shorter pause doesn't cut it short.
+        status.pause(until: now.addingTimeInterval(60))
+        #expect(status.problem(at: now.addingTimeInterval(120)) == .paused(until: resets))
+        status.fetchFailed("The network connection was lost.")
+        #expect(status.problem(at: now) == .paused(until: resets))
+        // Once it has passed, the failure that came after it shows.
+        #expect(!status.isPaused(at: resets))
+        #expect(status.problem(at: resets) == .failed("The network connection was lost."))
+    }
+
+    @Test func aPauseReplacesAnEarlierFailure() {
+        let now = Date(timeIntervalSince1970: 1000)
+        var status = RefreshStatus()
+        status.fetchFailed("Timed out")
+        status.pause(until: now.addingTimeInterval(60))
+        #expect(status.problem(at: now.addingTimeInterval(61)) == nil)
     }
 }
 
@@ -942,5 +1125,207 @@ private final class Recorded<Value: Sendable>: Sendable {
         #expect(CGImageDestinationFinalize(destination))
         #expect(Thumbnail.decode(data as Data)?.width == 4)
         #expect(Thumbnail.decode(Data("<html>".utf8)) == nil)
+    }
+}
+
+@Suite struct UploadQueueOrder {
+    @Test func promisedFilesKeepTheirDropOrderWhicheverArrivesFirst() {
+        var order = UploadOrder<String>()
+        let places = (0..<3).map { _ in order.reserve(compression: .off) }
+        order.fill(places[2], with: "c.png")
+        order.fill(places[1], with: "b.png")
+        #expect(!order.hasNext)
+        #expect(order.next() == nil)
+        order.fill(places[0], with: "a.png")
+        #expect([order.next(), order.next(), order.next()] == ["a.png", "b.png", "c.png"])
+        #expect(order.isEmpty)
+    }
+
+    @Test func aLaterFinderDropWaitsBehindAnEarlierPromise() {
+        var order = UploadOrder<String>()
+        let promised = order.reserve(compression: .off)
+        order.append("finder.mov")
+        #expect(order.next() == nil)
+        order.fill(promised, with: "photo.heic")
+        #expect([order.next(), order.next()] == ["photo.heic", "finder.mov"])
+    }
+
+    @Test func aFailedPromiseLetsTheFilesBehindItGo() {
+        var order = UploadOrder<String>()
+        let failed = order.reserve(compression: .off)
+        let next = order.reserve(compression: .off)
+        order.fill(next, with: "b.png")
+        order.append("c.png")
+        order.release(failed)
+        #expect([order.next(), order.next()] == ["b.png", "c.png"])
+        #expect(order.isEmpty)
+    }
+
+    @Test func theCompressionSettingIsTheOneReadWhenTheDropWasAccepted() {
+        var order = UploadOrder<String>()
+        let place = order.reserve(compression: .on(.crf22))
+        // The menu changes while the file is still arriving, and another Drop comes in.
+        let later = order.reserve(compression: .off)
+        #expect(place.compression == .on(.crf22))
+        #expect(later.compression == .off)
+    }
+
+    /// A promise that hands over a second file, or a release after its file arrived, never loses a file.
+    @Test func aPlaceIsOnlyUsedOnce() {
+        var order = UploadOrder<String>()
+        let place = order.reserve(compression: .off)
+        order.append("b.png")
+        order.fill(place, with: "a.png")
+        order.fill(place, with: "a2.png")
+        order.release(place)
+        #expect([order.next(), order.next(), order.next()] == ["a.png", "b.png", "a2.png"])
+    }
+}
+
+@Suite struct SavingTheCloudinaryURL {
+    /// Stands in for the Keychain: one item, or none.
+    private final class FakeKeychain {
+        var value: String?
+        var updateFails: OSStatus?
+        var addFails: OSStatus?
+        var adds = 0
+
+        func save(_ new: String) -> OSStatus {
+            KeychainWrite.save(
+                update: {
+                    guard value != nil else { return errSecItemNotFound }
+                    if let updateFails { return updateFails }
+                    value = new
+                    return errSecSuccess
+                },
+                add: {
+                    adds += 1
+                    if let addFails { return addFails }
+                    value = new
+                    return errSecSuccess
+                })
+        }
+    }
+
+    @Test func anExistingEntryIsUpdatedInPlace() {
+        let keychain = FakeKeychain()
+        keychain.value = "cloudinary://old"
+        #expect(keychain.save("cloudinary://new") == errSecSuccess)
+        #expect(keychain.value == "cloudinary://new")
+        #expect(keychain.adds == 0)
+    }
+
+    @Test func anEntryIsAddedOnlyWhenThereIsNone() {
+        let keychain = FakeKeychain()
+        #expect(keychain.save("cloudinary://new") == errSecSuccess)
+        #expect(keychain.value == "cloudinary://new")
+        #expect(keychain.adds == 1)
+    }
+
+    @Test func aFailedReplacementKeepsTheWorkingEntry() {
+        let keychain = FakeKeychain()
+        keychain.value = "cloudinary://old"
+        keychain.updateFails = errSecInteractionNotAllowed
+        #expect(keychain.save("cloudinary://new") == errSecInteractionNotAllowed)
+        #expect(keychain.value == "cloudinary://old")
+        #expect(keychain.adds == 0)
+    }
+
+    @Test func aSaveRunsOneAtATime() {
+        var attempts = SaveAttempts()
+        attempts.windowOpened()
+        let first = attempts.begin(fieldText: "cloudinary://a")
+        #expect(first != nil)
+        #expect(attempts.isSaving)
+        #expect(attempts.begin(fieldText: "cloudinary://b") == nil)
+        attempts.finish(first!)
+        #expect(!attempts.isSaving)
+        #expect(attempts.begin(fieldText: "cloudinary://b") != nil)
+    }
+
+    /// The window is closed and reopened while the check is still running, and something new is typed. When
+    /// the slow check finally answers, it mustn't close the reopened window or clear the new text.
+    @Test func aSlowSaveDoesntTouchTheReopenedWindow() async throws {
+        var attempts = SaveAttempts()
+        attempts.windowOpened()
+        let begun = attempts.begin(fieldText: "cloudinary://a")
+        let attempt = try #require(begun)
+        let verification = Task { try await Task.sleep(for: .milliseconds(50)) }
+
+        attempts.windowOpened()
+        #expect(attempts.isSaving)
+        try await verification.value
+
+        #expect(!attempts.mayClose(after: attempt))
+        #expect(!attempts.mayClearField(after: attempt, currentText: "cloudinary://typed-since"))
+        #expect(!attempts.mayClearField(after: attempt, currentText: "cloudinary://a"))
+        attempts.finish(attempt)
+        #expect(!attempts.isSaving)
+    }
+
+    @Test func aSaveInTheSameWindowClosesItAndClearsWhatItWasGiven() throws {
+        var attempts = SaveAttempts()
+        attempts.windowOpened()
+        let begun = attempts.begin(fieldText: "cloudinary://a")
+        let attempt = try #require(begun)
+        #expect(attempts.mayClose(after: attempt))
+        #expect(attempts.mayClearField(after: attempt, currentText: "cloudinary://a"))
+        #expect(!attempts.mayClearField(after: attempt, currentText: "cloudinary://typed-since"))
+    }
+}
+
+@Suite struct FilesThatGrowInTheQueue {
+    private func scratch() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("clouddrop-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// Accepted at drop time, then still being written to while it waits: the body stops at the Size Limit.
+    @Test func aFileThatGrewPastTheLimitIsStoppedWhileStreaming() throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("rec.mov")
+        try Data(count: 3_000_000).write(to: file)
+        let limit: Int64 = 4_000_000
+        #expect(checkMediaFile(filename: "rec.mov", type: .quickTimeMovie, byteCount: 3_000_000).map { _ in true } == .success(true))
+
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(count: 3_000_000))
+        try handle.close()
+
+        #expect(throws: UploadError.overSizeLimit(byteCount: 6_000_000)) {
+            try Uploader.writeMultipartBody(to: directory.appendingPathComponent("body"), boundary: "b", params: [:],
+                                            fileURL: file, sizeLimit: limit)
+        }
+    }
+
+    @Test func aFileAtTheLimitIsStreamedWhole() throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("a.png")
+        try Data(count: 2_500_000).write(to: file)
+        let body = directory.appendingPathComponent("body")
+
+        try Uploader.writeMultipartBody(to: body, boundary: "b", params: ["k": "v"], fileURL: file, sizeLimit: 2_500_000)
+
+        let size = try #require(try body.resourceValues(forKeys: [.fileSizeKey]).fileSize)
+        #expect(size > 2_500_000 && size < 2_501_000)
+    }
+
+    /// Nothing is sent: the fake cloud would otherwise fail with a network error instead.
+    @Test func anUploadOfAFileOverTheLimitFailsBeforeSendingAnything() async throws {
+        let directory = try scratch()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("a.png")
+        try Data(count: 2_000).write(to: file)
+        let uploader = Uploader(credentials: try #require(CloudinaryCredentials(parsing: "cloudinary://1:2@nonexistent-cloud")))
+        defer { uploader.invalidate() }
+
+        await #expect(throws: UploadError.overSizeLimit(byteCount: 2_000)) {
+            _ = try await uploader.upload(fileURL: file, kind: .image, publicID: "d/test0000", displayName: "a.png",
+                                          sizeLimit: 1_000) { _ in }
+        }
     }
 }

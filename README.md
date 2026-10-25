@@ -83,7 +83,7 @@ For each file:
 2. The **Share Link** opens in your default browser and is copied to the clipboard.
 3. The icon shows ✓ for 2 seconds, or ✗ if something went wrong.
 
-Drop several files and they upload **one at a time, in order**. Each one opens its own browser tab, so the clipboard ends up holding the **last** link. Dropping more files while an upload is running adds them to the end of the queue. If one file fails, the rest still upload.
+Drop several files and they upload **one at a time, in order**. Each one opens its own browser tab, so the clipboard ends up holding the **last** link. Dropping more files while an upload is running adds them to the end of the queue. Files from Photos or Mail keep their place even if they take a while to arrive, and anything dropped after them waits its turn. If one file fails, the rest still upload.
 
 ### The menu
 
@@ -121,8 +121,8 @@ Click the icon to see:
 | Accepted | Images (PNG, JPEG, HEIC, GIF, WebP, …) and videos (MOV, MP4, …) |
 | Refused | Everything else (PDFs, zips, folders), and files whose size can't be read |
 | Not supported | Dragging from a browser. It may work when the browser hands over a real file, but it isn't guaranteed |
-| Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown. While Compress Videos is on, a video's limit applies to its compressed file |
-| Captures | A screenshot or recording dropped straight from its floating thumbnail exists nowhere else. If it isn't uploaded (refused, failed, no Cloudinary URL yet, or CloudDrop quit first), it's saved to your **Downloads** folder as `cd-<name>`, and the menu says so. Other files are never moved or deleted |
+| Size limits | Images up to **10 MB**, videos up to **100 MB** (Cloudinary Free plan). Larger files are refused before uploading, with the size shown. The size is checked again when a file's turn comes, so one that grew while it waited is refused too. While Compress Videos is on, a video's limit applies to its compressed file |
+| Captures | A screenshot or recording dropped straight from its floating thumbnail exists nowhere else. If it isn't uploaded (refused, failed, no Cloudinary URL yet, or CloudDrop quit first), it's saved to your **Downloads** folder as `cd-<name>`, and the menu says so. If it can't be saved there (no permission for Downloads, or a full disk), the menu says "Couldn't save it to Downloads", and CloudDrop keeps it and tries again when it quits and at the next launch. Other files are never moved or deleted |
 
 Files dragged from apps such as Photos or Mail arrive as file promises into their own temporary folders and are deleted after uploading; because the original still exists in the source app, they are not saved to Downloads if refused or failed. Files dragged from Finder or other folders are never moved or deleted.
 
@@ -132,6 +132,7 @@ Screen recordings are often bigger than the Free plan's 100 MB video limit, and 
 
 - Recordings bigger than 1920×1920 are scaled down, keeping their shape: a 2880×1800 Retina recording becomes 1920×1200. Smaller ones keep their size.
 - At most 30 frames a second, with 96 kbps audio.
+- A phone video recorded sideways or upside down comes out upright.
 - On an M1 Air it takes about 20–30% of the recording's length and uses about one core. A 5-minute Retina recording goes from about 230 MB to about 15 MB.
 - The link ends in `.mp4`, and the recent links show the file as `<name>.mp4` with its compressed size. The original file is never changed.
 - Every video is compressed, even a small one, so every link plays in a browser.
@@ -144,7 +145,7 @@ If it doesn't work out:
 | ffmpeg failed (e.g. a format the Mac can't decode in hardware) | The original is uploaded if it's 100 MB or less, and the menu says "Couldn't compress <name>, uploaded it as is". If it's bigger, it's refused, and a Capture is saved as `cd-<name> (original).<ext>` |
 | Compress Videos is off, or ffmpeg isn't installed | Videos upload as they are. One over 100 MB is refused with a hint to turn compression on or install ffmpeg |
 
-Quitting while a video is compressing stops ffmpeg; a Capture is saved to Downloads as usual.
+Quitting while a video is compressing stops ffmpeg; a Capture is saved to Downloads as usual. `make install` and `make uninstall` quit CloudDrop the same way.
 
 **Where files end up:** each file gets a random 8-character name in the `d/` folder, so links are short and never reveal the original filename:
 
@@ -183,6 +184,8 @@ cd cloudinary-drop
 git pull
 make install
 ```
+
+`make install` asks the running CloudDrop to quit normally first, so a video being compressed stops and unfinished Captures are saved to Downloads. Only if it hasn't quit after 10 seconds is it killed (the next launch then saves the Captures).
 
 After each rebuild, macOS asks whether CloudDrop may use its Keychain item as soon as the new build launches, because it loads the recent links straight away. Choose **Always Allow**. This happens because local builds are signed ad-hoc, so each build looks like a new app to macOS (see [ADR 0002](docs/adr/0002-cloudinary-url-in-keychain.md)).
 
@@ -254,7 +257,8 @@ The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file 
 ```sh
 make test       # unit tests (Swift Testing); fails if the tests fail or if none ran
 make app        # build build/CloudDrop.app without installing
-make install    # build, copy to /Applications, relaunch
+make install    # build, quit the running app, copy to /Applications, relaunch
+make quit       # quit the running app the normal way (killed after 10 s)
 make clean
 ```
 
@@ -314,19 +318,25 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] With Compress Videos on, a Retina screen recording over 100 MB shows ↘↖ `n%`, then ↑ `n%`, then ✓. Its link ends in `.mp4`, plays at 1920 wide, and the recent links show `<name>.mp4` with the compressed size. The original in Finder is unchanged.
 - [ ] The menu shows Compress Videos (checked) with three indented Quality Levels between the recent links and the Usage line, separated above and below. Unchecking it hides the levels; choosing CRF 26 sticks after a relaunch.
 - [ ] Changing the Quality Level while a video is compressing doesn't affect that video or others already dropped.
-- [ ] A portrait iPhone video uploads compressed and plays upright.
 - [ ] With Compress Videos off, a 150 MB video is refused with "… Turn on Compress Videos to fit it."
 - [ ] With ffmpeg moved away (`brew unlink ffmpeg`), Compress Videos is greyed out and unchecked with "Please install ffmpeg" below it; a small video uploads as `.mov`, and a 150 MB one ends with "Install ffmpeg to compress it." `brew link ffmpeg` brings it back without relaunching.
 - [ ] A recording still over 100 MB after compressing (e.g. a long busy one) is refused with "is still … compressed … Try CRF 26." A Capture leaves `cd-<name> (original).mov` and `cd-<name> (compressed).mp4` in Downloads; a Finder file leaves only the compressed one.
 - [ ] Quitting while a video compresses leaves no `ffmpeg` process running (`pgrep ffmpeg`), and a Capture is saved to Downloads.
+- [ ] `make install` while a Capture is compressing leaves no `ffmpeg` running, and the relaunched app shows "Saved 1 unfinished Capture to Downloads".
+- [ ] A portrait iPhone video, and one recorded upside down, upload compressed and play upright in the browser, at 1080 wide for a 1080p portrait one.
 - [ ] Dropping 3 images uploads them in order, opens 3 tabs, and the clipboard holds the last link.
+- [ ] Dragging 3 photos from Photos (a large one first) uploads them in the order they were in the drag. A Finder file dropped straight after uploads after them.
+- [ ] A file that grows past its limit while it waits (e.g. append to a queued image behind a long upload: `head -c 12000000 /dev/zero >> big.png`) is refused with its new size, and the next file still uploads.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
 - [ ] A recording dropped from its floating thumbnail uploads, and nothing is left in Downloads.
 - [ ] A refused one (e.g. over 100 MB) is saved as `~/Downloads/cd-<name>`, and the ⚠︎ line ends with "Saved to Downloads."
+- [ ] With Downloads not writable (`chmod u-w ~/Downloads`; undo with `chmod u+w ~/Downloads`), a refused Capture ends with "Couldn't save it to Downloads." After quitting, the next launch shows "Couldn't save 1 unfinished Capture to Downloads, will try again at next launch". Once Downloads is writable again, the launch after that saves it.
 - [ ] Quitting while a recording dropped from its floating thumbnail is uploading saves it to Downloads, and the next launch flashes ✗ and shows "Saved 1 unfinished Capture to Downloads".
 - [ ] After a rebuild, choosing **Deny** on the Keychain prompt shows "Couldn't read the Cloudinary URL from the Keychain" without opening settings. Clicking the icon again doesn't bring the prompt back. The next Drop asks again, and **Always Allow** uploads it and fills in the recent links.
 - [ ] Pressing Return twice quickly in the settings window checks the URL only once.
+- [ ] Closing and reopening the settings window while it's still "Checking with Cloudinary…" shows that check with Save disabled. When it finishes, the window stays open, and anything typed since is kept.
+- [ ] Replacing a saved Cloudinary URL works, even right after a rebuild (the Keychain may ask once). With a URL for another cloud saved while an upload is running, that upload still opens and copies its link, but it doesn't appear in the new cloud's recent links.
 - [ ] An image dragged from `/tmp` in Finder uploads and is still in `/tmp` afterwards.
 - [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, the full date and the size.
 - [ ] Sizes and times line up in two right-aligned grey columns on every row, including a mix of `Yesterday` and `02:34 PM`. A screenshot name like `SCR-20261001-kywz.png` fits without shortening.

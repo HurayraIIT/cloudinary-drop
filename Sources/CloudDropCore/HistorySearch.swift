@@ -187,10 +187,52 @@ public struct HistorySearch: Sendable {
     }
 
     /// Which Deleted public_ids still need hiding after a successful fetch: the ones it still lists, unless the fetch
-    /// started long enough after the Delete that search should have caught up.
+    /// started long enough after the Delete that search should have caught up. A fetch that started before the
+    /// Delete says nothing about it, so it never ends the hiding, whether or not it lists the entry.
     public static func stillDeleted(_ deleted: [String: Date], fetched: [HistoryEntry], fetchStartedAt: Date) -> [String: Date] {
         let fetchedIDs = Set(fetched.map(\.publicID))
-        return deleted.filter { fetchedIDs.contains($0.key) && fetchStartedAt.timeIntervalSince($0.value) < indexingGrace }
+        return deleted.filter {
+            fetchStartedAt < $0.value
+                || fetchedIDs.contains($0.key) && fetchStartedAt.timeIntervalSince($0.value) < indexingGrace
+        }
+    }
+}
+
+/// What the menu says about refreshing the Link History. A rate limit's pause is kept apart from an ordinary
+/// failure: the Usage line can start one while a fetch is still running, and that fetch's answer mustn't end it.
+public struct RefreshStatus: Equatable, Sendable {
+    public enum Problem: Equatable, Sendable {
+        case failed(String)
+        case paused(until: Date)
+    }
+
+    private var pausedUntil: Date?
+    private var failure: String?
+
+    public init() {}
+
+    /// Never shortens a pause already in force. The failure it replaces would be stale once the pause ends.
+    public mutating func pause(until: Date) {
+        pausedUntil = max(pausedUntil ?? until, until)
+        failure = nil
+    }
+
+    public mutating func fetchSucceeded() {
+        failure = nil
+    }
+
+    public mutating func fetchFailed(_ reason: String) {
+        failure = reason
+    }
+
+    public func isPaused(at now: Date = Date()) -> Bool {
+        pausedUntil.map { now < $0 } ?? false
+    }
+
+    /// A pause that has passed isn't shown.
+    public func problem(at now: Date = Date()) -> Problem? {
+        if let pausedUntil, now < pausedUntil { return .paused(until: pausedUntil) }
+        return failure.map(Problem.failed)
     }
 }
 
