@@ -1,7 +1,6 @@
 import AppKit
 
-/// The Usage line in the menu. A view rather than a disabled item's title, which macOS draws dimmed and smaller than
-/// the Link History's filenames. It never highlights: its menu item is disabled, so it gets no hover or arrow keys.
+/// The Usage line in the fixed footer. It uses the filenames' font and color, and never highlights.
 @MainActor
 final class UsageRowView: NSView {
     init(line: String) {

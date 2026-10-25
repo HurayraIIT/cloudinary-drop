@@ -28,7 +28,9 @@ The ADRs:
 - **0007:** Delete from a Link History row: the signed `destroy` with `invalidate=true`, an alert with Cancel as default, Deleted assets hidden locally while search catches up.
 - **0008:** videos are compressed on the Mac with the user's Homebrew ffmpeg (libx264) before uploading, and the Size Limit is checked afterwards. The menu has a Compress Videos toggle and three Quality Levels (CRF 22/24/26). Apple's encoder, slower presets, native resolution and retrying at lower quality were rejected.
 
-`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0009-…`) and keep it to a paragraph or two.
+- **0009:** a native AppKit popover retains 50 Link History entries in a scrolling table, with fixed footer commands and two-line rows.
+
+`CONTEXT.md` is a glossary **only**: no implementation details. Add an ADR only for decisions that are hard to reverse, would surprise a future reader, **and** came from a real trade-off. Use the next number (`0010-…`) and keep it to a paragraph or two.
 
 ## Environment facts
 
@@ -82,10 +84,12 @@ Sources/
   CloudDrop/                      Executable target: the AppKit app. Not unit-tested; use the manual checklist
     main.swift                    NSApplication with the .accessory activation policy
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
-    StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
-    HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy, Open and Delete buttons
+    StatusController.swift        NSStatusItem, drag destination, icon states, popover, native Settings menu, settings window
+    HistoryPopoverController.swift  Scrollable reusable table, viewport and selection preservation, keyboard actions, fixed footer
+    PopoverBackgroundController.swift  Opaque background across the native popover, with content inside its safe area
+    HistoryRowView.swift          Reusable 40 pt table row: 28 pt thumbnail, filename above size and time, Copy, Open and Delete buttons
     UsageRowView.swift            The Usage line's menu row: a bar chart icon and label in the filenames' font and colour, never highlighted
-    LastErrorRowView.swift        The full Last Error with a warning icon, wrapped within the menu's width and no tooltip
+    LastErrorRowView.swift        The full Last Error with a warning icon, wrapped within the popover's width and no tooltip
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential compressions and uploads, their fallbacks, Deletes (alongside, not queued), Last Error, logging
     VideoCompression.swift        The Compress Videos toggle and Quality Level in UserDefaults, and the current CompressionSetting (checks for ffmpeg each time)
     OpenShareLinks.swift          The Open Share Links in Browser toggle in UserDefaults
@@ -123,22 +127,23 @@ Makefile                          Build, bundle, sign, install, and the test wra
 
 ### How the Link History refreshes
 
-1. `LinkHistory.refresh()` runs at launch and from `menuNeedsUpdate`. It skips if a fetch is running, the last one started under 30 s ago, or a rate limit pause hasn't ended. The pause is kept in `RefreshStatus` apart from refresh failures: a fetch that answers after the Usage line started a pause never ends it, and a shorter pause never shortens it.
-2. The menu is built at once from what's already known. When the fetch returns, an **open** menu is rebuilt only if its Link History section changed (public_ids, the problem line, loading/empty); a thumbnail arriving just updates its row. The highlight is restored by Share Link.
+1. `LinkHistory.refresh()` runs at launch and when the popover opens. It skips if a fetch is running, the last one started under 30 s ago, or a rate limit pause hasn't ended. The pause is kept in `RefreshStatus` apart from refresh failures: a fetch that answers after the Usage line started a pause never ends it, and a shorter pause never shortens it.
+2. The popover shows what's already known at once. A changed list reloads the reusable table while preserving the top visible entry and selected entry by public_id. Reopening starts at the newest entry. A thumbnail arriving updates only its visible cell; Usage and commands stay outside the scrolling list. Updates wait while the native Settings menu is open.
+   - Resize the `NSPopover` before changing its content view's frame. Otherwise AppKit can skip the window resize and clip a new Last Error on reopening. Verify this with a real popover window; rendering the content view alone misses it.
 3. A successful fetch replaces the fetched list. `HistorySearch.stillUnconfirmed` keeps this Mac's own Uploads that search doesn't list yet, for up to 2 minutes after the Upload.
-4. Image rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), cached in memory by public_id and pruned to what's shown.
+4. Visible image rows and two following rows without a thumbnail get one from Cloudinary (`c_fill,w_44,h_44`, `.jpg`), with at most two requests at once. The cache is in memory by public_id and pruned to the 50 retained entries. A closed popover starts no requests; failed thumbnails wait for a successful history fetch before retrying. Reset cancels thumbnail tasks and ignores stale completions.
 5. Saving new credentials calls `LinkHistory.reset()`, which clears everything and refetches.
 
 ### How the Usage line refreshes
 
-1. `UsageTracker.refresh()` runs at launch and from `menuNeedsUpdate`, next to the Link History's. It skips everything while `LinkHistory.isPaused`, and a rate limit it hits itself calls `LinkHistory.pause(until:)`: one key, one limit.
+1. `UsageTracker.refresh()` runs at launch and when the popover opens, next to the Link History's. It skips everything while `LinkHistory.isPaused`, and a rate limit it hits itself calls `LinkHistory.pause(until:)`: one key, one limit.
 2. Storage and credits (`GET /usage`, one call) are due an hour after the last answer; Cloudinary only updates them daily. The counts (two searches) are due 5 minutes after the last answer, or sooner when the last answer started less than 15 s after this Mac's latest Upload or Delete. After a failure, either waits at least 30 s.
 3. A success replaces that half; a 403 clears it, which hides the line until the next interval; anything else keeps the last values and is only logged. The line shows only when all four values are known.
-4. An open menu is rebuilt only when the line's text changes. Saving new credentials calls `UsageTracker.reset()`.
+4. A changed Usage line replaces its footer view without moving the visible Link History entry or selection. Saving new credentials calls `UsageTracker.reset()`.
 
 ### How a Delete flows
 
-1. The row's trash button closes the menu, then `StatusController.confirmDelete` shows an `NSAlert` (run on the next main-actor turn, outside the menu's tracking loop). Cancel is added first and given Return; Delete is red and has no key equivalent.
+1. The row's trash button closes the popover, then `StatusController.confirmDelete` shows an `NSAlert` on the next main-actor turn. Cancel is added first and given Return; Delete is red and has no key equivalent.
 2. `UploadQueue.delete` clears the Last Error and calls `Uploader.delete` at once, alongside any running Upload, on the same session.
 3. `ok` and `not found` both succeed: `LinkHistory.remove` hides the public_id, and ✓ flashes. A failure sets the Last Error to `Couldn't delete <file>: …` and flashes ✗; the row stays.
 4. `HistorySearch.stillDeleted` keeps hiding the public_id while fetches still list it, for up to 2 minutes after the Delete. A fetch that started before the Delete never ends the hiding, even if it doesn't list the entry (an Upload Deleted before search indexed it). No fetch is started for it, so the list is one short until the next refresh.
@@ -180,30 +185,31 @@ These are decisions the user made during design. Changing any of them needs thei
   - Don't add `f_auto`, `q_auto` or other transformations. The Link History's thumbnail URLs are the only other transformation, and they're never a Share Link ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)).
 - **Uploads never overwrite.** They're sent with `overwrite=false`. On a taken name, Cloudinary answers **200** describing the *old* file with `"existing": true`, and `Uploader.uploadedFile` turns that into `UploadError.nameTaken`. Without this check, the new Upload would get the old file's link. Leaving the version out is only safe because of this: a default overwrite serves the new bytes even at the old versioned URL.
 
-**Menu**
+**Menu bar popover** ([ADR 0009](docs/adr/0009-scrollable-link-history-popover.md))
+- The background is opaque in light and dark appearances, including the native popover's edges and arrow. Command rows highlight on hover with the same rounded accent background as Link History; hovering a command clears the table selection. Usage and Last Error never highlight.
 - **The Last Error clears when the next Drop or Delete begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
-  - Its warning icon precedes the full message, wrapped within the 420 pt menu. The row grows to fit every line, never truncates or highlights, and has no tooltip.
-- **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 10 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
+  - Its warning icon precedes the full message, wrapped within the 420 pt popover. The popover grows for a long error; an error taller than the available screen scrolls without truncation. It never highlights and has no tooltip.
+- **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 50 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
   - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
   - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
   - A failed refresh keeps the old list and adds a disabled "Couldn't refresh Link History" line with the reason as its tooltip. A rate limit (HTTP 420/429) shows "Link History paused until 03:00 PM" and stops refreshes until `X-FeatureRateLimit-Reset`. Neither touches the Last Error.
-- **Each entry is a `HistoryRowView`** in a fixed 420 pt menu: one 30 pt line of `[thumbnail] filename … size time [Copy] [Open]`, with the Share Link, the full date and time, and the size as the tooltip.
+- **Each entry is a reusable `HistoryRowView`** in a 420 pt AppKit popover. Its scrolling table shows seven 40 pt rows at the normal height; only Link History scrolls, with Usage and commands fixed below. Each row shows a thumbnail, filename above size and time, and Copy / Open / Delete buttons. The Share Link, full date and time, and size form its tooltip.
   - The filename is `display_name`, or the public_id's last part when that's empty.
   - The time is `HistoryTime.label`: the 12-hour `02:34 PM` today (`HistoryTime.clock`, also used by the tooltip and the paused line), `Yesterday`, a weekday within the last week, then `d MMM`, plus the year for past years.
   - The size is Cloudinary's `bytes`: what was uploaded, so a compressed video shows the compressed size, and a HEIC shows the HEIC's size, not the JPEG its Share Link delivers. This Mac's unconfirmed Uploads take it from the upload response. `MenuText.fileSize` uses the Size Limit messages' binary units: `850 KB` under 1 MB, `4.2 MB` under 10 MB, then `87 MB`. An unknown size leaves the cell blank, never `0 KB`.
-  - The size and time are right-aligned columns in grey monospaced digits. Each is as wide as its widest label in the menu, so every row lines up; there's no `·` separator.
-  - Images get a 22 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
+  - Size and time appear beneath the filename in grey monospaced digits, separated by `·`. An unknown size omits both the size and its separator.
+  - Images get a 28 pt square thumbnail with 4 pt rounded corners: made locally for this Mac's Uploads, fetched from Cloudinary for the rest. Videos get the `film` symbol, never a preview, and images without a thumbnail get `photo`.
   - The filename is shortened in the middle to the width that's left (`.byTruncatingMiddle`), not to a character count.
-  - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every action closes the menu, and a copy flashes ✓.
+  - Clicking the row or Copy copies the link (and does **not** open it). Open opens it without copying. Every row action closes the popover, and a copy flashes ✓.
   - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
-  - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
+  - The table selects on hover and arrow keys, draws a rounded highlight, and Return copies the selected entry. Tab reaches buttons and commands. Escape or an outside click closes the popover; ⌘, opens the Cloudinary URL field.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
-- **The Settings submenu** (`Settings ▸`, with a `gearshape` icon, after Set Cloudinary URL…) holds every setting but the Cloudinary URL, as native checkmark items in three groups split by separators: `Open Share Links in Browser`, then the compression section, then `Launch at Login`. Its items are built each time it opens, and an open menu's rebuild waits until it closes, so it doesn't vanish under the pointer.
+- **The Settings submenu** (`Settings ▸`, with a `gearshape` icon, after Set Cloudinary URL…) holds every setting but the Cloudinary URL, as native checkmark items in three groups split by separators: `Open Share Links in Browser`, then the compression section, then `Launch at Login`. Its native menu items are built each time it opens. Popover updates wait until it closes, so it does not vanish under the pointer.
 - **The compression section**:
   - `Compress Videos` with a checkmark, then three indented checkmark items, shown only while it's on: `CRF 22 · Best quality`, `CRF 24`, `CRF 26 · Smallest files`.
   - Without ffmpeg, `Compress Videos` is disabled and unchecked (whatever is saved), with a grey `Please install ffmpeg` line below it and no Quality Levels.
 - **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
-  - It's a view because macOS draws a disabled item's title dimmed and smaller. A `chart.bar` icon precedes its text. It uses the menu font with monospaced digits in the filenames' colour; its icon and text line up with the native menu's image and title columns below, and it never highlights.
+  - It is a view in the fixed footer. A `chart.bar` icon precedes its text. It uses the menu font with monospaced digits in the filenames' colour; its icon and text line up with the commands' image and title columns below, and it never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
   - The Free plan has **no storage limit**: storage, bandwidth and transformations share the account's credit allowance. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left. The percentage comes directly from Cloudinary and reflects allowance changes automatically; never assume a fixed 25-credit allowance.
   - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
@@ -290,7 +296,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
   - no `// MARK:` noise beyond the existing sections in `StatusController`
   - expression-bodied `switch` returns where the code already uses them
 - **Use glossary terms in names and UI text**, for example "Share Link", not "public URL", in comments and messages.
-- **User-facing error messages** are short, specific sentences that name the file: `"rec.mov is 250 MB, video limit is 100 MB"`. The full Last Error appears beside a warning icon in a wrapping menu row, with no tooltip.
+- **User-facing error messages** are short, specific sentences that name the file: `"rec.mov is 250 MB, video limit is 100 MB"`. The full Last Error appears beside a warning icon in a wrapping popover view, with no tooltip.
 - **Logging** uses `Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")` (the global `log` in `UploadQueue.swift`). Mark non-secret strings `privacy: .public` so they're readable. **Never log the API secret, the Cloudinary URL or the Authorization header.**
 - **SF Symbols only** for icons (template images), and no asset catalogs. The status item title uses monospaced digits so `NN%` doesn't jitter.
 
@@ -303,7 +309,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
 - They cover: parsing the Cloudinary URL, public_id names, signing (including Cloudinary's documented example), media kind detection, Size Limit boundaries and messages, reading upload responses (including the 403 and taken-name cases), the temp-file sweep, thumbnails (local, and Cloudinary's URL and decoding), Share Link shapes (image, video, HEIC), menu truncation and file sizes, the Link History search (request, reading results, 403, rate limit, merging unconfirmed Uploads, hiding Deleted ones) and its time labels, the Usage line (requests, reading answers, its text), Deletes (the destroy request and its signing and encoding, reading the answer), Compression (the setting, size checks and messages, names, ffmpeg arguments, progress parsing, rotation), Capture recovery when Downloads can't be written, the Upload Queue's order with promised files, the rate-limit pause against late answers, the Keychain's update-or-add, settings saves, and files that grow past the Size Limit in the queue.
 
 **App target**
-- It has no unit tests. After touching `StatusController`, `UploadQueue`, `VideoCompression`, `OpenShareLinks`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
+- It has no unit tests. After touching `StatusController`, `HistoryPopoverController`, `HistoryRowView`, `LinkHistory`, `UploadQueue`, `VideoCompression`, `OpenShareLinks`, the settings window, the Keychain or the login item, go through the **manual checklist in README.md**. If you can't run it (you can't drag files in a GUI), say so plainly and list which items the user needs to check.
 
 **Live checks against Cloudinary**
 - These are allowed, carefully. The account is the user's real one.

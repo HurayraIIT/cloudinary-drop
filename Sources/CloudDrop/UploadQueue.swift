@@ -344,7 +344,8 @@ final class UploadQueue {
     /// are deleted next. Decoding happens off the main actor so the menu bar never stalls.
     private static func thumbnail(of fileURL: URL) async -> NSImage? {
         let side = HistoryRowView.thumbnailSide
-        let image = await Task.detached { Thumbnail.make(imageAt: fileURL, side: Int(side * 2)) }.value
+        let pixels = HistoryRowView.thumbnailPixels
+        let image = await Task.detached { Thumbnail.make(imageAt: fileURL, side: pixels) }.value
         return image.map { NSImage(cgImage: $0, size: NSSize(width: side, height: side)) }
     }
 

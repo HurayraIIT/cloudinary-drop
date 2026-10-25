@@ -45,7 +45,7 @@ _Avoid_: URL, public link, delivery URL
 ### What the menu shows
 
 **Link History**:
-The ten most recent Uploads in the account, from either Mac, newest first, each labelled by filename (ending in `.mp4` for a compressed video, to match its Share Link), the size of what was uploaded, and upload time. It is read from Cloudinary, so every Mac shows the same list. Choosing one copies its Share Link again without opening it.
+The fifty most recent Uploads in the account, from either Mac, newest first, each labelled by filename (ending in `.mp4` for a compressed video, to match its Share Link), the size of what was uploaded, and upload time. It is read from Cloudinary, so every Mac shows the same list. Choosing one copies its Share Link again without opening it.
 _Avoid_: Recents, log
 
 **Delete**:

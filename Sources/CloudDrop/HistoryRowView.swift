@@ -1,156 +1,137 @@
 import AppKit
 import CloudDropCore
 
-/// One Link History entry in the menu: thumbnail, filename, size and time columns, and Copy / Open / Delete buttons.
-/// A view in a menu item draws its own highlight; `StatusController` sets `isHighlighted`
-/// from `menu(_:willHighlight:)` so hover and arrow keys look like a normal menu item.
+/// Reused by the table, so retaining fifty entries does not create fifty sets of controls.
 @MainActor
-final class HistoryRowView: NSView {
-    static let thumbnailSide: CGFloat = 22
+final class HistoryRowView: NSTableCellView {
+    static let thumbnailSide: CGFloat = 28
+    /// Keep the existing Cloudinary thumbnail size, avoiding another transformation for older Uploads.
+    static let thumbnailPixels = 44
     static let width: CGFloat = 420
-    /// Monospaced digits so times and sizes line up from row to row.
+    static let height: CGFloat = 40
     static let columnFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular)
 
-    /// The width of a column: its widest label among the rows in the menu, so every row lines up.
-    static func columnWidth(_ labels: [String]) -> CGFloat {
-        let field = NSTextField(labelWithString: "")
-        field.font = columnFont
-        return labels.map { label in
-            field.stringValue = label
-            return label.isEmpty ? 0 : field.intrinsicContentSize.width.rounded(.up)
-        }.max() ?? 0
-    }
-
-    var isHighlighted = false {
-        didSet {
-            guard isHighlighted != oldValue else { return }
-            updateColors()
-            needsDisplay = true
-        }
-    }
-
     private let thumbnail = NSImageView()
+    private let title = NSTextField(labelWithString: "")
+    private let details = NSTextField(labelWithString: "")
+    private let copyButton = RowButton(symbol: "doc.on.doc", label: "Copy Share Link")
+    private let openButton = RowButton(symbol: "arrow.up.right.square", label: "Open in Browser")
+    private let deleteButton = RowButton(symbol: "trash", label: "Delete…")
     private var isPlaceholder = true
-    private let title: NSTextField
-    private let size: NSTextField
-    private let time: NSTextField
-    private let copyButton: RowButton
-    private let openButton: RowButton
-    private let deleteButton: RowButton
-    private let onCopy: () -> Void
+    private var onHover: () -> Void = {}
+    private var onCopy: () -> Void = {}
 
-    /// `sizeText` is empty when Cloudinary didn't report a size; the cell stays blank rather than claim one.
-    init(entry: HistoryEntry, thumbnail image: NSImage?, size sizeText: String, time timeText: String, fullTime: String,
-         sizeWidth: CGFloat, timeWidth: CGFloat, onCopy: @escaping () -> Void, onOpen: @escaping () -> Void,
-         onDelete: @escaping () -> Void) {
-        self.onCopy = onCopy
-        title = NSTextField(labelWithString: entry.filename)
-        size = NSTextField(labelWithString: sizeText)
-        time = NSTextField(labelWithString: timeText)
-        copyButton = RowButton(symbol: "doc.on.doc", label: "Copy Link", action: onCopy)
-        openButton = RowButton(symbol: "arrow.up.right.square", label: "Open in Browser", action: onOpen)
-        deleteButton = RowButton(symbol: "trash", label: "Delete…", action: onDelete)
-        super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: 30))
-        autoresizingMask = .width
-        let details = sizeText.isEmpty ? fullTime : "\(fullTime) · \(sizeText)"
-        toolTip = "\(entry.shareLink.absoluteString)\n\(details)"
-        setAccessibilityLabel([entry.filename, sizeText, timeText].filter { !$0.isEmpty }.joined(separator: ", "))
+    var isHighlighted = false { didSet { updateColors() } }
+    var actionButtons: [NSButton] { [copyButton, openButton, deleteButton] }
 
-        if let image {
-            setThumbnail(image)
-        } else {
-            thumbnail.image = NSImage(systemSymbolName: entry.kind == .video ? "film" : "photo", accessibilityDescription: nil)
-            thumbnail.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        }
-
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        identifier = NSUserInterfaceItemIdentifier("HistoryEntry")
         title.font = NSFont.menuFont(ofSize: 0)
         title.lineBreakMode = .byTruncatingMiddle
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        title.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        for column in [size, time] {
-            column.font = Self.columnFont
-            column.alignment = .right
-        }
-
-        for view in [thumbnail, title, size, time, copyButton, openButton, deleteButton] as [NSView] {
+        details.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        thumbnail.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        thumbnail.imageScaling = .scaleProportionallyUpOrDown
+        thumbnail.wantsLayer = true
+        thumbnail.layer?.cornerRadius = 4
+        thumbnail.layer?.masksToBounds = true
+        for view in [thumbnail, title, details, copyButton, openButton, deleteButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
+        for button in [copyButton, openButton, deleteButton] {
+            button.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        }
         NSLayoutConstraint.activate([
-            thumbnail.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            thumbnail.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             thumbnail.centerYAnchor.constraint(equalTo: centerYAnchor),
             thumbnail.widthAnchor.constraint(equalToConstant: Self.thumbnailSide),
             thumbnail.heightAnchor.constraint(equalToConstant: Self.thumbnailSide),
-            title.leadingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: 8),
-            title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: size.leadingAnchor, constant: -10),
-            size.widthAnchor.constraint(equalToConstant: sizeWidth),
-            size.trailingAnchor.constraint(equalTo: time.leadingAnchor, constant: sizeWidth > 0 ? -10 : 0),
-            size.centerYAnchor.constraint(equalTo: centerYAnchor),
-            time.widthAnchor.constraint(equalToConstant: timeWidth),
-            time.trailingAnchor.constraint(equalTo: copyButton.leadingAnchor, constant: -10),
-            time.centerYAnchor.constraint(equalTo: centerYAnchor),
+            title.leadingAnchor.constraint(equalTo: thumbnail.trailingAnchor, constant: 9),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            title.trailingAnchor.constraint(equalTo: copyButton.leadingAnchor, constant: -8),
+            details.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            details.topAnchor.constraint(equalTo: title.bottomAnchor),
+            details.trailingAnchor.constraint(lessThanOrEqualTo: title.trailingAnchor),
             copyButton.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -4),
-            copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            // A wider gap, so a slip off Open doesn't land on Delete.
             openButton.trailingAnchor.constraint(equalTo: deleteButton.leadingAnchor, constant: -10),
+            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             openButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            deleteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             deleteButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
-        updateColors()
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    /// Also called when a thumbnail from Cloudinary arrives while the menu is open.
+    func configure(entry: HistoryEntry, image: NSImage?, onCopy: @escaping () -> Void,
+                   onOpen: @escaping () -> Void, onDelete: @escaping () -> Void, onHover: @escaping () -> Void) {
+        self.onHover = onHover
+        self.onCopy = onCopy
+        title.stringValue = entry.filename
+        let size = entry.byteCount.map(MenuText.fileSize) ?? ""
+        let time = HistoryTime.label(for: entry.uploadedAt)
+        details.stringValue = [size, time].filter { !$0.isEmpty }.joined(separator: " · ")
+        toolTip = ([entry.shareLink.absoluteString, HistoryTime.full(entry.uploadedAt)] + (size.isEmpty ? [] : [size]))
+            .joined(separator: "\n")
+        setAccessibilityLabel([entry.filename, size, time].filter { !$0.isEmpty }.joined(separator: ", "))
+        copyButton.onClick = onCopy
+        openButton.onClick = onOpen
+        deleteButton.onClick = onDelete
+        isPlaceholder = image == nil
+        thumbnail.image = image ?? NSImage(systemSymbolName: entry.kind == .video ? "film" : "photo", accessibilityDescription: nil)
+        updateColors()
+    }
+
     func setThumbnail(_ image: NSImage) {
         isPlaceholder = false
         thumbnail.image = image
         thumbnail.contentTintColor = nil
-        thumbnail.imageScaling = .scaleProportionallyUpOrDown
-        thumbnail.wantsLayer = true
-        thumbnail.layer?.cornerRadius = 4
-        thumbnail.layer?.masksToBounds = true
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard isHighlighted else { return }
-        NSColor.selectedContentBackgroundColor.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 6, yRadius: 6).fill()
+    override func mouseEntered(with event: NSEvent) { onHover() }
+
+    // Labels share the row's click target; the three buttons keep their own actions.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit is NSButton ? hit : self
     }
 
-    // Swallow the press so the click lands here, then copy on release like a menu item.
-    override func mouseDown(with event: NSEvent) {}
+    override func mouseDown(with event: NSEvent) { onHover() }
 
     override func mouseUp(with event: NSEvent) {
-        onCopy()
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onCopy() }
     }
 
     private func updateColors() {
         title.textColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
-        for column in [size, time] {
-            column.textColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
-        }
-        if isPlaceholder {
-            thumbnail.contentTintColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
-        }
-        copyButton.isRowHighlighted = isHighlighted
-        openButton.isRowHighlighted = isHighlighted
-        deleteButton.isRowHighlighted = isHighlighted
+        details.textColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
+        thumbnail.contentTintColor = isPlaceholder ? (isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor) : nil
+        for button in [copyButton, openButton, deleteButton] { button.isRowHighlighted = isHighlighted }
     }
 }
 
-/// A borderless SF Symbol button that brightens under the mouse.
+@MainActor
+final class HistoryTableRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        NSColor.selectedContentBackgroundColor.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6).fill()
+    }
+}
+
 @MainActor
 private final class RowButton: NSButton {
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
     var isRowHighlighted = false { didSet { updateTint() } }
     private var isHovered = false { didSet { updateTint() } }
-    private let onClick: () -> Void
+    var onClick: () -> Void = {}
 
-    init(symbol: String, label: String, action: @escaping () -> Void) {
-        onClick = action
+    init(symbol: String, label: String) {
         super.init(frame: .zero)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
@@ -159,7 +140,7 @@ private final class RowButton: NSButton {
         toolTip = label
         setAccessibilityLabel(label)
         target = self
-        self.action = #selector(click)
+        action = #selector(click)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
         updateTint()
     }
@@ -167,20 +148,12 @@ private final class RowButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 22, height: 22) }
-
+    override var intrinsicContentSize: NSSize { NSSize(width: 22, height: 26) }
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
-
     @objc private func click() { onClick() }
 
-    /// On the blue highlight an accent-coloured icon would vanish, so there hover means full white.
     private func updateTint() {
-        contentTintColor = switch (isRowHighlighted, isHovered) {
-        case (true, true): .selectedMenuItemTextColor
-        case (true, false): .selectedMenuItemTextColor.withAlphaComponent(0.7)
-        case (false, true): .controlAccentColor
-        case (false, false): .secondaryLabelColor
-        }
+        contentTintColor = isRowHighlighted ? .selectedMenuItemTextColor : (isHovered ? .controlAccentColor : .secondaryLabelColor)
     }
 }

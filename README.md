@@ -5,7 +5,7 @@ A tiny macOS menu bar app: **drop an image or video on the cloud icon and get a 
 It's built for one person, one Cloudinary account and two Macs. It isn't distributed or notarized, and it will never be on the App Store.
 
 - Native Swift + AppKit, about 540 KB installed, about 16 MB of memory when idle ([resource use](#resource-use))
-- No Dock icon, no windows except a one-time settings field
+- No Dock icon; a menu bar popover and a one-time settings field
 - Uploads go straight from your Mac to Cloudinary, with no server in between
 
 ---
@@ -87,18 +87,22 @@ Drop several files and they upload **one at a time, in order**. Each one opens i
 
 ### The menu
 
+The popover has an opaque background in light and dark appearances. Set Cloudinary URL…, Settings and Quit highlight on hover; Usage stays unhighlighted.
+
 Click the icon to see:
 
 | Item | What it does |
 |---|---|
-| ⚠︎ *error* | The full Last Error from your most recent Drop or Delete, or Captures saved to Downloads at launch. Long messages wrap within the menu instead of being cut off; there is no tooltip. It clears when you drop or delete something new |
-| Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as uploaded, so a compressed video shows its compressed size) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
+| ⚠︎ *error* | The full Last Error from your most recent Drop or Delete, or Captures saved to Downloads at launch. Long messages wrap and expand the popover; an error taller than the available screen scrolls without being cut off. There is no tooltip. It clears when you drop or delete something new |
+| Link History | The 50 newest Uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. The 420 pt popover shows seven rows at a time; scroll to see older entries while Usage and commands stay visible. Each row shows a thumbnail (a film icon for videos), the filename, then the file size and time beneath it, and **Copy**, **Open in Browser** and **Delete** buttons. Long filenames shorten in the middle. Clicking the row or pressing Return copies its Share Link and flashes ✓. Open opens without copying; Delete asks first. Every row action closes the popover. Hover for the Share Link, full date and size. Refreshes run in the background when you open it, at most every 30 seconds. Your own Uploads appear immediately. Updates preserve your position while open; reopening starts at the newest entry |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
 | `1,210 images · 26 videos · 636 MB · 12% of credits` | A bar chart icon precedes your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and the percentage of your credit allowance used, reported directly by Cloudinary. Changes to the allowance are reflected automatically. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits. Cloudinary updates storage and credits once a day; CloudDrop checks for an update when the menu opens, at most hourly. Hidden until the first fetch works, or if the key can't read it |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
 | Settings ▸ | A gear icon precedes **Settings**. Holds **Open Share Links in Browser**, **Compress Videos** with its Quality Levels, and **Launch at Login**, each saved on this Mac. See below |
 | Quit CloudDrop | Quits immediately. Any running uploads stop, and unfinished Captures are saved to Downloads |
+
+Use arrow keys to select a Link History entry, Return to copy, Tab to reach buttons and commands, and Escape or an outside click to close. **⌘,** opens the Cloudinary URL field. Image thumbnails load only for visible rows and two following rows, with at most two requests at once. The list and thumbnails stay in memory only.
 
 The **Settings** submenu:
 
@@ -246,7 +250,7 @@ This logs every upload, refusal and failure, including Cloudinary's error messag
 
 ## Resource use
 
-Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30):
+Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30), before the scrollable popover in ADR 0009. These are historical measurements; the new UI still needs measurement on the M1 Air:
 
 | | |
 |---|---|
@@ -254,8 +258,10 @@ Measured on an M4 MacBook Pro running macOS 26.6.2 (2026-09-30):
 | Memory, idle | about 16 MB after launch, including the first Link History fetch; about 30 MB after some use (opening the menu with its thumbnails, an upload) |
 | CPU, idle | 0.0%, with about 5 threads and no timers or polling; about 0.03 s of CPU a minute and 10–16 idle wakeups a minute |
 | Energy, idle | 0.0 in `top`'s power column, so it doesn't keep the Mac awake |
-| Network, idle | none. At launch, one search for the Link History and three calls for the Usage line. After that, only when you open the menu: at most one Link History search every 30 seconds, the two Usage counts at most every 5 minutes (sooner after an upload or Delete), and the Usage storage and credits at most hourly. Each thumbnail is about 1 KB. A Delete is one request, and doesn't count toward the hourly limit |
+| Network, idle | none. At launch, one search for the Link History and three calls for the Usage line. After that, only when you open the menu: at most one Link History search every 30 seconds, the two Usage counts at most every 5 minutes (sooner after an upload or Delete), and the Usage storage and credits at most hourly. Each 44 px thumbnail was about 1 KB; the popover requests them as rows become visible, with at most two requests at once. A Delete is one request, and doesn't count toward the hourly limit |
 | Upload of a 75 MB video | about 1 second of CPU in total, peak memory about 17 MB (measured 2026-09-28) |
+
+A scratch AppKit view comparison on an Apple M4 (2026-10-25), without network requests or image thumbnails, retained 10 versus 50 sample entries. Both created seven visible row views and used about 15.6 MiB peak memory footprint (median of three fresh processes per count). This checks the cost of retaining more entries; it does not measure the complete running app or replace measurements on the M1 Air.
 
 The file is streamed from disk in 1 MB pieces, so memory doesn't grow with file size. Upload time depends on your connection: 75 MB took about 70 seconds over Wi-Fi.
 
@@ -303,6 +309,7 @@ docs/adr/          Architecture decisions and what's deliberately out of scope
   - 0006: recent links fetched from Cloudinary
   - 0007: deleting from the recent links
   - 0008: compressing videos before uploading
+  - 0009: a scrollable Link History in an AppKit popover
 
   Read these before adding features.
 
@@ -339,7 +346,8 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dragging 3 photos from Photos (a large one first) uploads them in the order they were in the drag. A Finder file dropped straight after uploads after them.
 - [ ] A file that grows past its limit while it waits (e.g. append to a queued image behind a long upload: `head -c 12000000 /dev/zero >> big.png`) is refused with its new size, and the next file still uploads.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
-- [ ] A long Last Error shows its entire message beside a warning icon, wrapping within the 420 pt menu without a tooltip or highlight. Long filenames and messages with line breaks are fully visible; the menu does not widen. The next Drop or Delete still clears it.
+- [ ] A long Last Error wraps beside a warning icon within the 420 pt popover, increasing its height without a tooltip or highlight. An error taller than the screen scrolls without truncation, and commands remain reachable. The next Drop or Delete still clears it.
+- [ ] Open and close the popover without an error, then Drop a Media File over its Size Limit. Reopen several times: the full refusal stays visible above Link History. Repeat with an error before the first opening, a longer error, and after the next Drop clears it. The actual popover window must resize with its content, without clipping the error above the visible area.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
 - [ ] A recording dropped from its floating thumbnail uploads, and nothing is left in Downloads.
 - [ ] A refused one (e.g. over 100 MB) is saved as `~/Downloads/cd-<name>`, and the ⚠︎ line ends with "Saved to Downloads."
@@ -350,16 +358,17 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Closing and reopening the settings window while it's still "Checking with Cloudinary…" shows that check with Save disabled. When it finishes, the window stays open, and anything typed since is kept.
 - [ ] Replacing a saved Cloudinary URL works, even right after a rebuild (the Keychain may ask once). With a URL for another cloud saved while an upload is running, that upload still opens and copies its link, but it doesn't appear in the new cloud's recent links.
 - [ ] An image dragged from `/tmp` in Finder uploads and is still in `/tmp` afterwards.
-- [ ] Recent links show the newest first, at most 10, with long names shortened in the middle. Hovering shows the URL, the full date and the size.
-- [ ] Sizes and times line up in two right-aligned grey columns on every row, including a mix of `Yesterday` and `02:34 PM`. A screenshot name like `SCR-20261001-kywz.png` fits without shortening.
+- [ ] Link History retains up to 50 entries, newest first. Seven 40 pt rows fit the normal viewport; scrolling reaches the oldest retained entry while Usage and commands stay fixed. Ten versus fifty entries does not change the normal height. Hovering shows the Share Link, full date and size.
+- [ ] Each row shows the filename above grey monospaced size and time, separated by `·`. Unknown sizes leave no misleading zero or separator. Long filenames shorten in the middle. Light and dark appearances keep text, focus and buttons legible, with an opaque background across the popover and its arrow. Windows behind the popover never show through.
 - [ ] Right after launch, the first click shows the account's recent links, including ones older than this launch, with `Yesterday`/weekday/date labels.
 - [ ] A file uploaded on the **other Mac** appears here the next time the menu is opened (after at most 30 seconds), with a thumbnail if it's an image.
 - [ ] Your own new upload appears at the top immediately and doesn't disappear and reappear a few seconds later.
-- [ ] With the menu open while a refresh finishes, the rows update in place without jumping more than needed, and the highlight stays on the same entry.
+- [ ] Scroll to an older entry, select it, then Upload or wait for a refresh from the other Mac. The visible entry and selection stay stable. Delete an entry above the viewport and verify the same behavior. Close and reopen: the list starts at the newest entry.
 - [ ] With Wi-Fi off, opening the menu keeps the old list and shows "Couldn't refresh Link History", with the reason on hover. Turning Wi-Fi back on clears it at the next refresh.
 - [ ] Saving a key that can upload but not list or delete shows the warning and keeps the window open.
-- [ ] Each image row has a rounded square thumbnail, and each video row a film icon.
-- [ ] Hovering a row or moving with the arrow keys highlights it. Return copies the highlighted row.
+- [ ] Each image row has a 28 pt rounded square thumbnail, and each video row a film icon. Scroll quickly through 50 entries: reused rows never show another entry's filename, thumbnail or actions. At most two thumbnails load concurrently; closing the popover starts no further thumbnail requests.
+- [ ] Hover Set Cloudinary URL…, Settings and Quit: each command gets a rounded accent highlight and white text/icons/shortcut, and the previous Link History highlight clears. Moving away clears the command highlight. Usage and Last Error never highlight.
+- [ ] Hovering a row or moving with arrow keys highlights it. Return copies the selected row. Tab reaches Copy, Open, Delete and footer commands; VoiceOver names the selected entry and buttons. Escape and an outside click close the popover. ⌘, opens the Cloudinary URL field; ⌘Q quits.
 - [ ] Clicking a row or its Copy button copies without opening, closes the menu and flashes ✓. The Open button opens the link and closes the menu.
 - [ ] Each row has a trash button after Open, with a slightly wider gap. It's grey normally and white on the highlighted row, and the filename shortens to make room.
 - [ ] Clicking trash closes the menu and shows an alert naming the file, with its thumbnail (or a film icon), a red **Delete** and a default **Cancel**. Return cancels. Esc cancels or does nothing, but never deletes.
@@ -370,7 +379,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] With Wi-Fi off, Delete flashes ✗ and the menu shows "Couldn't delete <file>: …", and the row stays. The next Drop or Delete clears that line.
 - [ ] Right after launch, the first click shows a line like `1,210 images · 26 videos · 636 MB · 12% of credits` under a separator below the recent links, matching the Cloudinary console's totals. It's as bright and as large as the filenames, lines up with "Set Cloudinary URL…", has no separator between it and "Set Cloudinary URL…", never highlights, and has no tooltip.
 - [ ] After an upload, the image or video count goes up by one at the next menu open after about 15 seconds. After a Delete, it goes down.
-- [ ] With the menu open when the Usage line first arrives, it appears in place and the highlight stays on the same row.
+- [ ] With the popover open when Usage first arrives, the line appears below the list without moving its visible entry or selection. Usage and commands remain visible after scrolling to the bottom.
 - [ ] With Wi-Fi off, the Usage line keeps its last values and shows no error.
 - [ ] Deleting while a queue of uploads is running doesn't stop or reorder the uploads.
 - [ ] Turning Wi-Fi off mid-upload ends with ✗ and a network error, and the next queued file is still tried.

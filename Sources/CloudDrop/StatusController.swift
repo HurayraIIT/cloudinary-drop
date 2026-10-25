@@ -2,19 +2,18 @@ import AppKit
 import CloudDropCore
 import UniformTypeIdentifiers
 
-/// Owns the menu bar icon: it receives Drops, shows the icon states and builds the menu.
+/// Owns the menu bar icon: it receives Drops, shows the icon states and presents the Link History.
 @MainActor
-final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination, NSMenuDelegate {
+final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination, NSMenuDelegate, NSPopoverDelegate {
     private enum Flash { case success, failure }
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let queue = UploadQueue()
     private let history = LinkHistory()
     private let usage = UsageTracker()
-    private let menu = NSMenu()
-    /// Kept across rebuilds of the menu, because a submenu can belong to only one item; its items are made each time it opens.
+    private let popover = NSPopover()
+    private let content = HistoryPopoverController()
     private let settingsMenu = NSMenu()
-    private let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
     private let promiseQueue = OperationQueue()
     private lazy var settings = SettingsWindowController { [weak self] saved in
         self?.storedCredentials = .success(saved)
@@ -27,25 +26,37 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     private var flash: Flash?
     private var flashToken = 0
 
-    private var isMenuOpen = false
     private var isSettingsMenuOpen = false
-    /// An open menu's rebuild that waited for the Settings submenu to close, so it doesn't vanish under the pointer.
-    private var needsRebuild = false
-    /// What the open menu's Link History section shows, to tell a real change from a thumbnail arriving.
-    private var shownHistory: [String] = []
-    private var shownUsage: String?
-    private var rowViews: [String: HistoryRowView] = [:]
-    /// Survives a rebuild of the open menu, so the highlight stays on the same entry.
-    private var highlightedLink: URL?
+    private var displayedError: String?
 
     override init() {
         super.init()
-        menu.delegate = self
+        popover.behavior = .transient
+        popover.animates = false
+        popover.delegate = self
+        popover.hasFullSizeContent = true
+        popover.contentViewController = PopoverBackgroundController(content: content)
         settingsMenu.delegate = self
-        settingsItem.submenu = settingsMenu
-        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
-        statusItem.menu = menu
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(togglePopover)
+        content.thumbnail = { [weak self] entry in self?.history.thumbnail(for: entry) }
+        content.onVisibleEntries = { [weak self] ids in self?.history.showThumbnails(for: ids) }
+        content.onCopy = { [weak self] entry in
+            self?.popover.performClose(nil)
+            self?.queue.recopy(entry.shareLink)
+        }
+        content.onOpen = { [weak self] entry in
+            self?.popover.performClose(nil)
+            NSWorkspace.shared.open(entry.shareLink)
+        }
+        content.onDelete = { [weak self] entry in
+            self?.popover.performClose(nil)
+            Task { @MainActor in self?.confirmDelete(entry) }
+        }
+        content.onDismiss = { [weak self] in self?.popover.performClose(nil) }
+        content.onCloudinaryURL = { [weak self] in self?.showSettings() }
+        content.onSettings = { [weak self] button in self?.showSettingsMenu(from: button) }
+        content.onResize = { [weak self] size in self?.popover.contentSize = size }
         statusItem.button?.imagePosition = .imageLeft
 
         // The status item's window forwards drag events to its delegate.
@@ -73,11 +84,12 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             self.usage.countsChanged()
         }
         history.credentials = { [weak self] in try? self?.credentials() }
-        history.onChange = { [weak self] in self?.historyChanged() }
+        history.onChange = { [weak self] in self?.updatePopover() }
+        history.onThumbnail = { [weak self] id in self?.content.updateThumbnail(for: id) }
         usage.credentials = { [weak self] in try? self?.credentials() }
         usage.isPaused = { [weak self] in self?.history.isPaused ?? false }
         usage.onRateLimited = { [weak self] until in self?.history.pause(until: until) }
-        usage.onChange = { [weak self] in self?.usageChanged() }
+        usage.onChange = { [weak self] in self?.updatePopover() }
         render()
         // So the first click already shows the Link History and the Usage line.
         history.refresh()
@@ -254,159 +266,52 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
             if let percent = queue.activity?.percent { title = " \(percent)%" }
         }
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "CloudDrop")
+        if queue.lastError != displayedError { updatePopover() }
         button.attributedTitle = NSAttributedString(
             string: title,
             attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)])
     }
 
-    // MARK: Menu
+    // MARK: Link History
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === self.menu else { return buildSettingsMenu() }
-        // Shows what's already known now; a fresh list replaces it in place when it arrives.
+    @objc private func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        guard let button = statusItem.button else { return }
+        content.maximumHeight = (button.window?.screen?.visibleFrame.height ?? 800) - 60
         history.refresh()
         usage.refresh()
-        buildMenu()
+        updatePopover(force: true)
+        NSApp.activate()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        content.beginBrowsing()
     }
 
-    func menuWillOpen(_ menu: NSMenu) {
-        if menu === settingsMenu { isSettingsMenuOpen = true } else { isMenuOpen = true }
+    private func updatePopover(force: Bool = false) {
+        guard (popover.isShown || force), !isSettingsMenuOpen else { return }
+        content.update(entries: history.entries, isLoading: !history.hasLoaded && history.isFetching,
+                       problem: history.currentProblem, usage: usage.usage.line, lastError: queue.lastError)
+        displayedError = queue.lastError
     }
 
-    func menuDidClose(_ menu: NSMenu) {
-        guard menu === self.menu else {
-            isSettingsMenuOpen = false
-            if needsRebuild, isMenuOpen { rebuildOpenMenu() }
-            return
-        }
-        isMenuOpen = false
-        highlightedLink = nil
+    func popoverShouldClose(_ popover: NSPopover) -> Bool { !isSettingsMenuOpen }
+
+    func popoverDidClose(_ notification: Notification) {
+        content.endBrowsing()
     }
 
-    /// A refresh or a thumbnail finished. An open menu is only rebuilt when its Link History section changed,
-    /// so rows don't shift under the pointer for nothing.
-    private func historyChanged() {
-        guard isMenuOpen else { return }
-        guard historySection() == shownHistory else { return rebuildOpenMenu() }
-        for entry in history.entries {
-            if let image = history.thumbnail(for: entry) { rowViews[entry.publicID]?.setThumbnail(image) }
-        }
+    private func showSettingsMenu(from button: NSView) {
+        isSettingsMenuOpen = true
+        let chosen = settingsMenu.popUp(positioning: nil, at: NSPoint(x: button.bounds.maxX, y: button.bounds.maxY), in: button)
+        isSettingsMenuOpen = false
+        if chosen { popover.performClose(nil) }
+        updatePopover()
     }
 
-    private func usageChanged() {
-        guard isMenuOpen, usage.usage.line != shownUsage else { return }
-        rebuildOpenMenu()
-    }
-
-    private func rebuildOpenMenu() {
-        guard !isSettingsMenuOpen else {
-            needsRebuild = true
-            return
-        }
-        buildMenu()
-        for item in menu.items {
-            (item.view as? HistoryRowView)?.isHighlighted = item.representedObject as? URL == highlightedLink
-        }
-    }
-
-    private func historySection() -> [String] {
-        var section = history.entries.map(\.publicID)
-        switch history.currentProblem {
-        case let .failed(reason)?: section.append("failed: \(reason)")
-        case let .paused(until)?: section.append("paused: \(until)")
-        case nil: break
-        }
-        if history.entries.isEmpty { section.append(isLoading ? "loading" : "empty") }
-        return section
-    }
-
-    private var isLoading: Bool { !history.hasLoaded && history.isFetching }
-
-    private func buildMenu() {
-        menu.removeAllItems()
-        needsRebuild = false
-        rowViews = [:]
-        shownHistory = historySection()
-        shownUsage = usage.usage.line
-
-        if let error = queue.lastError {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.view = LastErrorRowView(message: error)
-            item.isEnabled = false
-            menu.addItem(item)
-            menu.addItem(.separator())
-        }
-
-        if history.entries.isEmpty {
-            let empty = NSMenuItem(title: isLoading ? "Loading…" : "No uploads yet", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-        } else {
-            let sizes = history.entries.map { $0.byteCount.map(MenuText.fileSize) ?? "" }
-            let times = history.entries.map { HistoryTime.label(for: $0.uploadedAt) }
-            let sizeWidth = HistoryRowView.columnWidth(sizes)
-            let timeWidth = HistoryRowView.columnWidth(times)
-            for (index, entry) in history.entries.enumerated() {
-                // The action is what Return sends for a highlighted row; clicks go through the view.
-                let item = NSMenuItem(title: entry.filename, action: #selector(copyHistoryEntry(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = entry.shareLink
-                let row = HistoryRowView(
-                    entry: entry,
-                    thumbnail: history.thumbnail(for: entry),
-                    size: sizes[index],
-                    time: times[index],
-                    fullTime: HistoryTime.full(entry.uploadedAt),
-                    sizeWidth: sizeWidth,
-                    timeWidth: timeWidth,
-                    onCopy: { [weak self] in
-                        self?.menu.cancelTracking()
-                        self?.queue.recopy(entry.shareLink)
-                    },
-                    onOpen: { [weak self] in
-                        self?.menu.cancelTracking()
-                        NSWorkspace.shared.open(entry.shareLink)
-                    },
-                    onDelete: { [weak self] in
-                        self?.menu.cancelTracking()
-                        // After the menu has finished closing, so the alert isn't run from inside its tracking loop.
-                        Task { @MainActor in self?.confirmDelete(entry) }
-                    })
-                item.view = row
-                rowViews[entry.publicID] = row
-                menu.addItem(item)
-            }
-        }
-
-        if let problem = history.currentProblem {
-            let item: NSMenuItem
-            switch problem {
-            case let .failed(reason):
-                item = NSMenuItem(title: "Couldn't refresh Link History", action: nil, keyEquivalent: "")
-                item.toolTip = reason
-            case let .paused(until):
-                item = NSMenuItem(title: "Link History paused until \(HistoryTime.clock(until))", action: nil, keyEquivalent: "")
-                item.toolTip = HistoryFetchError.rateLimited(until: until).localizedDescription
-            }
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        if let line = shownUsage {
-            let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
-            item.view = UsageRowView(line: line)
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-
-        let urlItem = NSMenuItem(title: "Set Cloudinary URL…", action: #selector(openSettings), keyEquivalent: ",")
-        urlItem.target = self
-        menu.addItem(urlItem)
-
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit CloudDrop", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        buildSettingsMenu()
     }
 
     /// Built each time it opens, so it checks for ffmpeg then.
@@ -456,19 +361,6 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         }
     }
 
-    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
-        guard menu === self.menu else { return }
-        highlightedLink = item?.representedObject as? URL
-        for menuItem in menu.items {
-            (menuItem.view as? HistoryRowView)?.isHighlighted = menuItem === item
-        }
-    }
-
-    @objc private func copyHistoryEntry(_ sender: NSMenuItem) {
-        guard let link = sender.representedObject as? URL else { return }
-        queue.recopy(link)
-    }
-
     /// Names the file and shows its thumbnail, because a Delete can't be undone. Cancel is the default button.
     private func confirmDelete(_ entry: HistoryEntry) {
         let alert = NSAlert()
@@ -484,10 +376,6 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         NSApp.activate()
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         queue.delete(entry)
-    }
-
-    @objc private func openSettings() {
-        showSettings()
     }
 
     @objc private func toggleOpenShareLinks() {
@@ -512,6 +400,7 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
     }
 
     private func showSettings() {
+        popover.performClose(nil)
         settings.show(current: try? credentials())
     }
 }

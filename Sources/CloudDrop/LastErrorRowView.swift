@@ -1,8 +1,10 @@
 import AppKit
 
-/// The entire Last Error, wrapped to the menu's width instead of hiding its ending in a tooltip.
+/// The entire Last Error, wrapped to the popover's width instead of hiding its ending in a tooltip.
 @MainActor
 final class LastErrorRowView: NSView {
+    override var isFlipped: Bool { true }
+
     init(message: String) {
         let label = NSTextField(wrappingLabelWithString: message)
         label.font = NSFont.menuFont(ofSize: 0)

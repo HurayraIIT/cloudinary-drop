@@ -765,7 +765,7 @@ private final class Recorded<Value: Sendable>: Sendable {
     }
 
     @Test func searchesTheCloudDropFolderNewestFirst() throws {
-        let request = HistorySearch.request(credentials: credentials, limit: 10)
+        let request = HistorySearch.request(credentials: credentials, limit: HistorySearch.limit)
         #expect(request.url?.absoluteString == "https://api.cloudinary.com/v1_1/djasqoair/resources/search")
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Basic MTIzOmFiYw==")
@@ -773,7 +773,7 @@ private final class Recorded<Value: Sendable>: Sendable {
         let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(body["expression"] as? String == "asset_folder=clouddrop")
         #expect(body["sort_by"] as? [[String: String]] == [["created_at": "desc"]])
-        #expect(body["max_results"] as? Int == 10)
+        #expect(body["max_results"] as? Int == 50)
         #expect((body["fields"] as? [String])?.contains("bytes") == true)
     }
 
@@ -835,13 +835,13 @@ private final class Recorded<Value: Sendable>: Sendable {
     }
 
     @Test func combinedListIsSortedDeduplicatedAndCapped() {
-        let fetched = (0..<10).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
+        let fetched = (0..<50).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
         let mine = [entry("d/f3", at: 970), entry("d/mine", at: 955)]
         let combined = HistorySearch.combine(fetched: fetched, unconfirmed: mine)
-        #expect(combined.count == 10)
+        #expect(combined.count == 50)
         #expect(combined.map(\.publicID).filter { $0 == "d/f3" }.count == 1)
         #expect(combined[5].publicID == "d/mine")
-        #expect(combined.last?.publicID == "d/f8")
+        #expect(combined.last?.publicID == "d/f48")
     }
 
     @Test func ownUploadIsDroppedOnceSearchListsIt() {
@@ -856,10 +856,10 @@ private final class Recorded<Value: Sendable>: Sendable {
     }
 
     @Test func deletedEntriesAreHiddenAndNotReplacedFromUnconfirmed() {
-        let fetched = (0..<10).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
+        let fetched = (0..<50).map { entry("d/f\($0)", at: TimeInterval(1000 - $0 * 10)) }
         let mine = [entry("d/mine", at: 2000)]
         let combined = HistorySearch.combine(fetched: fetched, unconfirmed: mine, deleted: ["d/f0", "d/mine"])
-        #expect(combined.map(\.publicID) == (1..<10).map { "d/f\($0)" })
+        #expect(combined.map(\.publicID) == (1..<50).map { "d/f\($0)" })
     }
 
     @Test func deletedStaysHiddenWhileSearchStillListsItButNotForever() {

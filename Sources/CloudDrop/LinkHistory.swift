@@ -1,13 +1,13 @@
 import AppKit
 import CloudDropCore
 
-/// The Link History: the newest Uploads in the account, from either Mac (ADR 0006). The menu shows what's
+/// The Link History: the newest Uploads in the account, from either Mac (ADR 0006). The popover shows what's
 /// already here at once and a refresh updates it in the background. Nothing is written to disk.
 @MainActor
 final class LinkHistory {
     typealias Problem = RefreshStatus.Problem
 
-    /// Opening the menu more often than this reuses the last fetch. Both Macs share 500 API calls an hour.
+    /// Opening the popover more often than this reuses the last fetch. Both Macs share 500 API calls an hour.
     private static let refreshInterval: TimeInterval = 30
     /// How long to wait after a rate limit that didn't say when it resets.
     private static let defaultPause: TimeInterval = 10 * 60
@@ -20,6 +20,7 @@ final class LinkHistory {
 
     var credentials: () -> CloudinaryCredentials? = { nil }
     var onChange: () -> Void = {}
+    var onThumbnail: (String) -> Void = { _ in }
 
     private var fetched: [HistoryEntry] = []
     /// This Mac's own Uploads, kept until a fetch lists them, because search takes a few seconds to catch up.
@@ -27,13 +28,15 @@ final class LinkHistory {
     /// Deleted public_ids and when, hidden until a fetch stops listing them, because search takes a few seconds to catch up.
     private var deleted: [String: Date] = [:]
     private var thumbnails: [String: NSImage] = [:]
-    private var thumbnailsLoading: Set<String> = []
+    private var thumbnailTasks: [String: Task<Void, Never>] = [:]
+    private var thumbnailFailures: Set<String> = []
+    private var visibleIDs: [String] = []
     private var lastFetch: Date?
     /// Bumped when the Cloudinary URL changes, so a fetch for the old one is ignored.
     private var generation = 0
     private var search: HistorySearch?
 
-    /// What the menu should say under the entries, if anything. A pause that has passed isn't shown.
+    /// What the popover should say under the entries, if anything. A pause that has passed isn't shown.
     var currentProblem: Problem? { status.problem() }
 
     /// True while a rate limit is in force. The Usage line's calls count toward the same limit.
@@ -98,7 +101,10 @@ final class LinkHistory {
         unconfirmed = []
         deleted = [:]
         thumbnails = [:]
-        thumbnailsLoading = []
+        thumbnailTasks.values.forEach { $0.cancel() }
+        thumbnailTasks = [:]
+        thumbnailFailures = []
+        visibleIDs = []
         hasLoaded = false
         isFetching = false
         status = RefreshStatus()
@@ -113,6 +119,7 @@ final class LinkHistory {
         switch result {
         case let .success(list):
             fetched = list
+            thumbnailFailures = []
             unconfirmed = HistorySearch.stillUnconfirmed(unconfirmed, fetched: list, fetchStartedAt: startedAt)
             deleted = HistorySearch.stillDeleted(deleted, fetched: list, fetchStartedAt: startedAt)
             hasLoaded = true
@@ -132,24 +139,40 @@ final class LinkHistory {
         entries = HistorySearch.combine(fetched: fetched, unconfirmed: unconfirmed, deleted: Set(deleted.keys))
         let shown = Set(entries.map(\.publicID))
         thumbnails = thumbnails.filter { shown.contains($0.key) }
+        thumbnailFailures.formIntersection(shown)
         loadThumbnails()
     }
 
-    /// Fetches a Cloudinary-cropped thumbnail for each image without one. A failure is retried after the next fetch.
+    /// The viewport supplies visible entries first, then a small lookahead. A closed popover requests none.
+    func showThumbnails(for publicIDs: [String]) {
+        visibleIDs = publicIDs
+        loadThumbnails()
+    }
+
+    /// At most two requests run at once; failures wait for the next successful history fetch before retrying.
     private func loadThumbnails() {
         guard let search else { return }
-        let generation = generation
-        let side = HistoryRowView.thumbnailSide
-        for entry in entries where entry.kind == .image
-            && thumbnails[entry.publicID] == nil && !thumbnailsLoading.contains(entry.publicID) {
-            thumbnailsLoading.insert(entry.publicID)
-            Task {
-                let image = await search.thumbnail(publicID: entry.publicID, side: Int(side * 2))
-                guard generation == self.generation else { return }
-                thumbnailsLoading.remove(entry.publicID)
-                guard let image, entries.contains(where: { $0.publicID == entry.publicID }) else { return }
-                thumbnails[entry.publicID] = NSImage(cgImage: image, size: NSSize(width: side, height: side))
-                onChange()
+        let wanted = visibleIDs.compactMap { id in entries.first { $0.publicID == id && $0.kind == .image } }
+        for entry in wanted where thumbnailTasks.count < 2 && thumbnails[entry.publicID] == nil
+            && thumbnailTasks[entry.publicID] == nil && !thumbnailFailures.contains(entry.publicID) {
+            let id = entry.publicID
+            let generation = generation
+            thumbnailTasks[id] = Task { [weak self] in
+                let image = await search.thumbnail(publicID: id, side: HistoryRowView.thumbnailPixels)
+                guard let self, generation == self.generation else { return }
+                thumbnailTasks.removeValue(forKey: id)
+                if entries.contains(where: { $0.publicID == id }) {
+                    if let image {
+                        if thumbnails[id] == nil {
+                            thumbnails[id] = NSImage(cgImage: image, size: NSSize(width: HistoryRowView.thumbnailSide,
+                                                                              height: HistoryRowView.thumbnailSide))
+                        }
+                        onThumbnail(id)
+                    } else {
+                        thumbnailFailures.insert(id)
+                    }
+                }
+                loadThumbnails()
             }
         }
     }

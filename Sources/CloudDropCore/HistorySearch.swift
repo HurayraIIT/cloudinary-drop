@@ -53,7 +53,7 @@ public enum HistoryFetchError: LocalizedError, CustomStringConvertible, Equatabl
 /// Reads the newest Uploads in the `clouddrop` asset folder with Cloudinary's Search API, so the Link History
 /// shows what either Mac uploaded (ADR 0006). Keep one per Cloudinary URL and `invalidate()` it when replaced.
 public struct HistorySearch: Sendable {
-    public static let limit = 10
+    public static let limit = 50
     /// Search can take a few seconds to show a fresh Upload or drop a Deleted one. A fetch that started this long
     /// after one of our own Uploads and still doesn't list it means the file is gone, e.g. deleted in the console.
     public static let indexingGrace: TimeInterval = 120
