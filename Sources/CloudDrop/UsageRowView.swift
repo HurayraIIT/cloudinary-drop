@@ -7,16 +7,26 @@ final class UsageRowView: NSView {
     init(line: String) {
         super.init(frame: NSRect(x: 0, y: 0, width: HistoryRowView.width, height: 30))
         autoresizingMask = .width
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "chart.bar", accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+        icon.contentTintColor = .labelColor
         let label = NSTextField(labelWithString: line)
         label.font = HistoryRowView.columnFont
         label.textColor = .labelColor
         label.lineBreakMode = .byTruncatingTail
+        icon.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
         addSubview(label)
-        // Lines up with standard menu item titles below (Set Cloudinary URL… and Settings): 14 pt, as no top-level
-        // item has a checkmark to make room for. NSTextField has 2 pt alignment rect insets, so the constant is +2.
+        setAccessibilityLabel(line)
+        // Match the native menu's image and title columns. NSTextField's alignment rect adds 2 pt to the title inset.
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 16),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 38),
             label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])

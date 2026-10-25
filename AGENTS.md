@@ -84,7 +84,8 @@ Sources/
     AppDelegate.swift             Installs a hidden main menu (needed for ⌘V/⌘C in text fields), login item, StatusController; sweeps temp files at launch and quit
     StatusController.swift        NSStatusItem, drag destination, icon states, menu building, settings window
     HistoryRowView.swift          The custom menu row for one Link History entry: thumbnail, filename, size and time columns, Copy, Open and Delete buttons
-    UsageRowView.swift            The Usage line's menu row: one label in the filenames' font and colour, never highlighted
+    UsageRowView.swift            The Usage line's menu row: a bar chart icon and label in the filenames' font and colour, never highlighted
+    LastErrorRowView.swift        The full Last Error with a warning icon, wrapped within the menu's width and no tooltip
     UploadQueue.swift             @MainActor Upload Queue: validation, sequential compressions and uploads, their fallbacks, Deletes (alongside, not queued), Last Error, logging
     VideoCompression.swift        The Compress Videos toggle and Quality Level in UserDefaults, and the current CompressionSetting (checks for ffmpeg each time)
     OpenShareLinks.swift          The Open Share Links in Browser toggle in UserDefaults
@@ -181,6 +182,7 @@ These are decisions the user made during design. Changing any of them needs thei
 
 **Menu**
 - **The Last Error clears when the next Drop or Delete begins**, not when an Upload next succeeds. Otherwise a refusal in a mixed Drop would vanish before the user saw it.
+  - Its warning icon precedes the full message, wrapped within the 420 pt menu. The row grows to fit every line, never truncates or highlights, and has no tooltip.
 - **The Link History comes from Cloudinary** ([ADR 0006](docs/adr/0006-link-history-from-cloudinary.md)): the 10 newest assets in `asset_folder=clouddrop`, from either Mac, newest first by `created_at`.
   - It's held in memory only, thumbnails included; nothing is written to disk. That's why `HistorySearch` uses an ephemeral session.
   - The menu never waits on the network: it shows the current list, or "Loading…" before the first fetch has worked.
@@ -196,12 +198,12 @@ These are decisions the user made during design. Changing any of them needs thei
   - Delete (`trash`, after Open with a 10 pt gap) asks first in an alert naming the file, with Cancel as the default button. It works on any row, from either Mac and in either public_id shape. It never touches the clipboard, even if it holds the Deleted Share Link ([ADR 0007](docs/adr/0007-delete-from-the-link-history.md)).
   - A view in a menu item draws its own highlight: `menu(_:willHighlight:)` sets `isHighlighted` for hover and arrow keys. Return sends the item's action, which copies.
   - The buttons are always visible: grey normally, white on the highlighted row (an accent colour would vanish on the accent-coloured highlight).
-- **The Settings submenu** (`Settings ▸`, after Set Cloudinary URL…) holds every setting but the Cloudinary URL, as native checkmark items in three groups split by separators: `Open Share Links in Browser`, then the compression section, then `Launch at Login`. Its items are built each time it opens, and an open menu's rebuild waits until it closes, so it doesn't vanish under the pointer.
+- **The Settings submenu** (`Settings ▸`, with a `gearshape` icon, after Set Cloudinary URL…) holds every setting but the Cloudinary URL, as native checkmark items in three groups split by separators: `Open Share Links in Browser`, then the compression section, then `Launch at Login`. Its items are built each time it opens, and an open menu's rebuild waits until it closes, so it doesn't vanish under the pointer.
 - **The compression section**:
   - `Compress Videos` with a checkmark, then three indented checkmark items, shown only while it's on: `CRF 22 · Best quality`, `CRF 24`, `CRF 26 · Smallest files`.
   - Without ffmpeg, `Compress Videos` is disabled and unchecked (whatever is saved), with a grey `Please install ffmpeg` line below it and no Quality Levels.
 - **The Usage line** is one 30 pt `UsageRowView` after the separator under the Link History, with no separator below it: `1,210 images · 26 videos · 636 MB · 12% of credits`.
-  - It's a view because macOS draws a disabled item's title dimmed and smaller. It uses the menu font with monospaced digits in the filenames' colour, lines up with the menu items below (Set Cloudinary URL… and Settings; no top-level item has a checkmark), and never highlights.
+  - It's a view because macOS draws a disabled item's title dimmed and smaller. A `chart.bar` icon precedes its text. It uses the menu font with monospaced digits in the filenames' colour; its icon and text line up with the native menu's image and title columns below, and it never highlights.
   - It covers the **whole account**, not just `asset_folder=clouddrop`; raw files aren't counted.
   - The Free plan has **no storage limit**: storage, bandwidth and transformations share the account's credit allowance. So there's no "remaining storage"; `credits.used_percent` (whole number, `<1%` below 1%) is the only measure of what's left. The percentage comes directly from Cloudinary and reflects allowance changes automatically; never assume a fixed 25-credit allowance.
   - Storage uses `MenuText.fileSize`, which steps to `1.3 GB` from 1000 MB up.
@@ -288,7 +290,7 @@ After `verify` passes and the key is saved, the settings window runs one search 
   - no `// MARK:` noise beyond the existing sections in `StatusController`
   - expression-bodied `switch` returns where the code already uses them
 - **Use glossary terms in names and UI text**, for example "Share Link", not "public URL", in comments and messages.
-- **User-facing error messages** are short, specific sentences that name the file: `"rec.mov is 250 MB, video limit is 100 MB"`. They appear in the menu's ⚠︎ line, truncated to 60 characters with the full text in the tooltip.
+- **User-facing error messages** are short, specific sentences that name the file: `"rec.mov is 250 MB, video limit is 100 MB"`. The full Last Error appears beside a warning icon in a wrapping menu row, with no tooltip.
 - **Logging** uses `Logger(subsystem: "com.hurayraiit.clouddrop", category: "upload")` (the global `log` in `UploadQueue.swift`). Mark non-secret strings `privacy: .public` so they're readable. **Never log the API secret, the Cloudinary URL or the Authorization header.**
 - **SF Symbols only** for icons (template images), and no asset catalogs. The status item title uses monospaced digits so `NN%` doesn't jitter.
 

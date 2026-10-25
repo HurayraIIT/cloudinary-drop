@@ -43,6 +43,8 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         menu.delegate = self
         settingsMenu.delegate = self
         settingsItem.submenu = settingsMenu
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
         statusItem.menu = menu
         statusItem.button?.imagePosition = .imageLeft
 
@@ -328,8 +330,8 @@ final class StatusController: NSObject, NSWindowDelegate, NSDraggingDestination,
         shownUsage = usage.usage.line
 
         if let error = queue.lastError {
-            let item = NSMenuItem(title: "⚠︎ " + MenuText.truncateMiddle(error, maxLength: 60), action: nil, keyEquivalent: "")
-            item.toolTip = error
+            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            item.view = LastErrorRowView(message: error)
             item.isEnabled = false
             menu.addItem(item)
             menu.addItem(.separator())

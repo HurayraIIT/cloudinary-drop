@@ -91,13 +91,13 @@ Click the icon to see:
 
 | Item | What it does |
 |---|---|
-| ⚠︎ *error* | The last problem from your most recent Drop or Delete, or Captures saved to Downloads at launch. Hover for the full text. It clears when you drop or delete something new |
+| ⚠︎ *error* | The full Last Error from your most recent Drop or Delete, or Captures saved to Downloads at launch. Long messages wrap within the menu instead of being cut off; there is no tooltip. It clears when you drop or delete something new |
 | Recent links | The 10 newest uploads in your Cloudinary account's `clouddrop` folder, **from either Mac**, newest first. Each row shows a thumbnail (a film icon for videos), the filename, then the file size (`850 KB`, `4.2 MB`, `87 MB`, as uploaded, so a compressed video shows its compressed size) and the time (`02:34 PM` today, then `Yesterday`, `Mon`, `12 Sep`) in right-aligned columns, and three buttons: **Copy**, **Open in Browser** and **Delete** (trash). Clicking the row also copies, and the icon flashes ✓. Hover for the URL, the full date and the size. The list refreshes in the background each time you open the menu (at most every 30 seconds), and your own uploads appear immediately |
 | Couldn't refresh Link History | The last refresh failed, for example because you're offline, and the list may be out of date. Hover for the reason |
 | Link History paused until 03:00 PM | Cloudinary's hourly API limit (500 calls, shared by both Macs) was reached. Refreshes resume at that time; uploads aren't affected |
-| `1,210 images · 26 videos · 636 MB · 12% of credits` | Your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and the percentage of your credit allowance used, reported directly by Cloudinary. Changes to the allowance are reflected automatically. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits. Cloudinary updates storage and credits once a day; CloudDrop checks for an update when the menu opens, at most hourly. Hidden until the first fetch works, or if the key can't read it |
+| `1,210 images · 26 videos · 636 MB · 12% of credits` | A bar chart icon precedes your **whole account's** Usage, not just CloudDrop's uploads: how many images and videos it holds, how much storage they use (`1.3 GB` from 1000 MB up), and the percentage of your credit allowance used, reported directly by Cloudinary. Changes to the allowance are reflected automatically. The Free plan has no storage limit of its own; storage, bandwidth and transformations all spend the same credits. Cloudinary updates storage and credits once a day; CloudDrop checks for an update when the menu opens, at most hourly. Hidden until the first fetch works, or if the key can't read it |
 | Set Cloudinary URL… | Paste or replace the Cloudinary URL |
-| Settings ▸ | **Open Share Links in Browser**, **Compress Videos** with its Quality Levels, and **Launch at Login**, each saved on this Mac. See below |
+| Settings ▸ | A gear icon precedes **Settings**. Holds **Open Share Links in Browser**, **Compress Videos** with its Quality Levels, and **Launch at Login**, each saved on this Mac. See below |
 | Quit CloudDrop | Quits immediately. Any running uploads stop, and unfinished Captures are saved to Downloads |
 
 The **Settings** submenu:
@@ -324,6 +324,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] A screen recording (`.mov`, 10–100 MB) uploads and plays in the browser.
 - [ ] With Compress Videos on, a Retina screen recording over 100 MB shows ↘↖ `n%`, then ↑ `n%`, then ✓. Its link ends in `.mp4`, plays at 1920 wide, and the recent links show `<name>.mp4` with the compressed size. The original in Finder is unchanged.
 - [ ] The menu's top level is the recent links, then (after a separator) the Usage line, Set Cloudinary URL… and Settings ▸, then Quit. **Settings ▸** shows Open Share Links in Browser (checked), then Compress Videos (checked) with three indented Quality Levels, then Launch at Login, with separators between the three groups. Unchecking Compress Videos hides the levels; choosing CRF 26 sticks after a relaunch.
+- [ ] A gear icon appears before Settings ▸, and a bar chart icon before the Usage line. Their icons and text line up, and Set Cloudinary URL… has no icon.
 - [ ] With Open Share Links in Browser off, dropping a PNG copies its link and flashes ✓ but opens no tab. It stays off after a relaunch, and the recent links' Open button still opens.
 - [ ] Dropping 5 images and turning Open Share Links in Browser off after the first tab opens: no more tabs open, and the clipboard holds the last link.
 - [ ] With the Settings submenu open while the recent links or the Usage line refresh (open the menu and go straight to Settings), the submenu stays open; the top level updates after it closes.
@@ -338,6 +339,7 @@ Drag-and-drop, the Keychain and the menu aren't covered by `make test`. After ch
 - [ ] Dragging 3 photos from Photos (a large one first) uploads them in the order they were in the drag. A Finder file dropped straight after uploads after them.
 - [ ] A file that grows past its limit while it waits (e.g. append to a queued image behind a long upload: `head -c 12000000 /dev/zero >> big.png`) is refused with its new size, and the next file still uploads.
 - [ ] Dropping a PDF together with a PNG uploads the PNG. The menu still shows the PDF's error until the next Drop.
+- [ ] A long Last Error shows its entire message beside a warning icon, wrapping within the 420 pt menu without a tooltip or highlight. Long filenames and messages with line breaks are fully visible; the menu does not widen. The next Drop or Delete still clears it.
 - [ ] A 12 MB image or a 150 MB video is refused with its size and the limit.
 - [ ] A recording dropped from its floating thumbnail uploads, and nothing is left in Downloads.
 - [ ] A refused one (e.g. over 100 MB) is saved as `~/Downloads/cd-<name>`, and the ⚠︎ line ends with "Saved to Downloads."
